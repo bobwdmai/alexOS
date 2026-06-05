@@ -1,0 +1,8 @@
+[Unit]
+Description=AlexOS Fast GitHub Update
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/sbin/alexos-update auto

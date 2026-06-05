@@ -1,0 +1,50 @@
+name: Build AlexOS ISO
+
+on:
+  push:
+    tags:
+      - "v*"
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "Release version, for example v0.1.0"
+        required: true
+        default: "v0.1.0"
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: ubuntu-24.04
+
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v4
+
+      - name: Install host dependencies
+        run: ./scripts/install-deps.sh
+
+      - name: Pick release version
+        id: version
+        shell: bash
+        run: |
+          if [[ "${GITHUB_REF_TYPE}" == "tag" ]]; then
+            version="${GITHUB_REF_NAME}"
+          else
+            version="${{ inputs.version }}"
+          fi
+          echo "version=${version}" >> "${GITHUB_OUTPUT}"
+
+      - name: Build ISO
+        env:
+          ALEXOS_VERSION: ${{ steps.version.outputs.version }}
+          ALEXOS_UPDATE_REPO: ${{ github.repository }}
+          ALEXOS_SOURCE_COMMIT: ${{ github.sha }}
+        run: make iso
+
+      - name: Upload release assets
+        env:
+          GH_TOKEN: ${{ github.token }}
+          VERSION: ${{ steps.version.outputs.version }}
+        run: ./scripts/release-github.sh "${VERSION}"

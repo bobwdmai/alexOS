@@ -1,0 +1,10 @@
+#!/usr/bin/env bash
+set -Eeuo pipefail
+
+cat <<'MSG'
+AlexOS
+
+Open the app menu to find drawing, building, writing, and web apps.
+
+Have fun making things.
+MSG

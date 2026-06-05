@@ -1,0 +1,203 @@
+#!/usr/bin/env bash
+set -Eeuo pipefail
+
+CONFIG_FILE="/etc/alexos/update.conf"
+CURRENT_COMMIT_FILE="/etc/alexos/source-commit"
+STATE_DIR="/var/lib/alexos/update"
+CACHE_DIR="/var/cache/alexos/update"
+
+if [[ -r "${CONFIG_FILE}" ]]; then
+  # shellcheck disable=SC1090
+  source "${CONFIG_FILE}"
+fi
+
+ALEXOS_UPDATE_REPO="${ALEXOS_UPDATE_REPO:-bobwdmai/alexOS}"
+ALEXOS_UPDATE_BRANCH="${ALEXOS_UPDATE_BRANCH:-main}"
+ALEXOS_UPDATE_AUTO_APPLY="${ALEXOS_UPDATE_AUTO_APPLY:-1}"
+ALEXOS_ICON_THEME="${ALEXOS_ICON_THEME:-blueprint-WhiteSur-dark-GNOME}"
+
+mode="${1:-check}"
+case "${mode}" in
+  --check) mode="check" ;;
+  --apply) mode="apply" ;;
+  --auto) mode="auto" ;;
+esac
+
+log() {
+  printf 'alexos-update: %s\n' "$*"
+}
+
+die() {
+  printf 'alexos-update: ERROR: %s\n' "$*" >&2
+  exit 1
+}
+
+usage() {
+  cat <<EOF
+Usage:
+  alexos-update check    Check GitHub for a newer AlexOS overlay
+  alexos-update apply    Download and apply the newest overlay
+  alexos-update auto     Timer mode: check and apply if enabled
+EOF
+}
+
+need_root() {
+  if (( EUID == 0 )); then
+    return
+  fi
+
+  if command -v sudo >/dev/null 2>&1; then
+    exec sudo "$0" "${mode}"
+  fi
+
+  die "Run as root."
+}
+
+require_commands() {
+  local missing=()
+  local command
+  for command in curl python3 tar cp find head install rm sed; do
+    if ! command -v "${command}" >/dev/null 2>&1; then
+      missing+=("${command}")
+    fi
+  done
+
+  if ((${#missing[@]} > 0)); then
+    printf 'Missing required commands:\n' >&2
+    printf '  %s\n' "${missing[@]}" >&2
+    exit 1
+  fi
+}
+
+latest_commit() {
+  local api="https://api.github.com/repos/${ALEXOS_UPDATE_REPO}/commits/${ALEXOS_UPDATE_BRANCH}"
+  local body
+  body="$(mktemp)"
+
+  curl -fsSL \
+    --retry 2 \
+    --connect-timeout 5 \
+    -H "Accept: application/vnd.github+json" \
+    "${api}" \
+    -o "${body}"
+
+  python3 - "${body}" <<'PY'
+import json
+import sys
+
+with open(sys.argv[1], "r", encoding="utf-8") as handle:
+    data = json.load(handle)
+
+print(data["sha"])
+PY
+
+  rm -f "${body}"
+}
+
+current_commit() {
+  if [[ -r "${CURRENT_COMMIT_FILE}" ]]; then
+    sed -n '1p' "${CURRENT_COMMIT_FILE}"
+    return
+  fi
+
+  printf 'unknown\n'
+}
+
+write_state() {
+  local key="$1"
+  local value="$2"
+  install -d -m 0755 "${STATE_DIR}"
+  printf '%s\n' "${value}" > "${STATE_DIR}/${key}"
+}
+
+apply_overlay() {
+  local target_commit="$1"
+  local tmp_dir="${CACHE_DIR}/${target_commit}"
+  local archive="${tmp_dir}/source.tar.gz"
+  local source_root
+  local overlay_dir
+
+  need_root "$@"
+  require_commands
+
+  install -d -m 0755 "${tmp_dir}" "${STATE_DIR}"
+  log "Downloading ${ALEXOS_UPDATE_REPO}@${target_commit}"
+  curl -fL \
+    --retry 3 \
+    --connect-timeout 10 \
+    --continue-at - \
+    "https://github.com/${ALEXOS_UPDATE_REPO}/archive/${target_commit}.tar.gz" \
+    -o "${archive}"
+
+  tar -xzf "${archive}" -C "${tmp_dir}"
+  source_root="$(find "${tmp_dir}" -mindepth 1 -maxdepth 1 -type d | head -n 1)"
+  overlay_dir="${source_root}/config/includes.chroot"
+
+  [[ -d "${overlay_dir}" ]] || die "Update overlay not found in GitHub source."
+
+  log "Applying AlexOS overlay"
+  cp -a "${overlay_dir}/." /
+
+  install -d -m 0755 /etc/alexos
+  printf '%s\n' "${target_commit}" > "${CURRENT_COMMIT_FILE}"
+
+  if command -v dconf >/dev/null 2>&1; then
+    dconf update || true
+  fi
+
+  if command -v gtk-update-icon-cache >/dev/null 2>&1 && [[ -d "/usr/share/icons/${ALEXOS_ICON_THEME}" ]]; then
+    gtk-update-icon-cache -f -t "/usr/share/icons/${ALEXOS_ICON_THEME}" || true
+  fi
+
+  if command -v systemctl >/dev/null 2>&1; then
+    systemctl daemon-reload || true
+    systemctl enable alexos-update.timer >/dev/null 2>&1 || true
+  fi
+
+  write_state "last-applied" "${target_commit}"
+  log "Updated to ${target_commit}."
+}
+
+main() {
+  case "${mode}" in
+    check | apply | auto) ;;
+    -h | --help | help)
+      usage
+      return 0
+      ;;
+    *)
+      usage >&2
+      return 2
+      ;;
+  esac
+
+  require_commands
+
+  local current
+  local latest
+  current="$(current_commit)"
+  latest="$(latest_commit)"
+
+  write_state "last-seen" "${latest}"
+
+  if [[ "${current}" == "${latest}" ]]; then
+    log "Already current: ${current}."
+    return 0
+  fi
+
+  log "Update available: ${current} -> ${latest}."
+
+  if [[ "${mode}" == "check" ]]; then
+    log "Run: sudo alexos-update apply"
+    return 100
+  fi
+
+  if [[ "${mode}" == "auto" && "${ALEXOS_UPDATE_AUTO_APPLY}" != "1" ]]; then
+    log "Auto-apply is off. Set ALEXOS_UPDATE_AUTO_APPLY=1 in ${CONFIG_FILE} to enable it."
+    return 0
+  fi
+
+  apply_overlay "${latest}"
+}
+
+main "$@"

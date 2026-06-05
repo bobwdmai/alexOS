@@ -1,0 +1,400 @@
+#!/usr/bin/env python3
+import fcntl
+import os
+import re
+import subprocess
+import sys
+
+SETUP_COMPLETE = "/var/lib/alexos/setup-complete"
+LOCK_PATH = "/tmp/alexos-setup-wizard.lock"
+LIVE_USER = "alex"
+USERNAME_RE = re.compile(r"^[a-z_][a-z0-9_-]{0,31}$")
+ID = "/usr/bin/id"
+SHELL = "/bin/sh"
+USERADD = "/usr/sbin/useradd"
+CHPASSWD = "/usr/sbin/chpasswd"
+USERMOD = "/usr/sbin/usermod"
+
+LOGO_SVG = """\
+<svg xmlns="http://www.w3.org/2000/svg" width="160" height="160" viewBox="0 0 160 160">
+  <rect width="160" height="160" rx="36" fill="#0d1b2a"/>
+  <path d="M80 24 L104 126 H88 L83 104 H54 L49 126 H33 L57 24 Z" fill="#e0fbfc"/>
+  <path d="M58 90 H80 L69 43 Z" fill="#00b4d8"/>
+  <circle cx="80" cy="80" r="61" fill="none" stroke="#00b4d8" stroke-width="3" opacity="0.55"/>
+</svg>
+"""
+
+GDM_COMPLETE_CONFIG = """\
+[daemon]
+WaylandEnable=false
+AutomaticLoginEnable=false
+"""
+
+FINALIZE_SCRIPT = f"""\
+set -e
+export PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+install -d -m 0755 /var/lib/alexos
+cat > /etc/gdm3/custom.conf <<'GDMEOF'
+{GDM_COMPLETE_CONFIG.rstrip()}
+GDMEOF
+touch {SETUP_COMPLETE}
+systemctl disable alexos-first-boot.service >/dev/null 2>&1 || true
+passwd -l {LIVE_USER} >/dev/null 2>&1 || true
+usermod -s /usr/sbin/nologin {LIVE_USER} >/dev/null 2>&1 || true
+rm -f /etc/sudoers.d/alexos-live
+( sleep 3; systemctl restart gdm3 || systemctl restart gdm || true ) >/dev/null 2>&1 &
+"""
+
+
+def take_lock():
+    lock_file = open(LOCK_PATH, "w", encoding="utf-8")
+    try:
+        fcntl.flock(lock_file, fcntl.LOCK_EX | fcntl.LOCK_NB)
+    except BlockingIOError:
+        sys.exit(0)
+    return lock_file
+
+
+def ensure_graphical_session():
+    if os.environ.get("DISPLAY") or os.environ.get("WAYLAND_DISPLAY"):
+        return
+    print("AlexOS setup wizard needs a graphical display.", file=sys.stderr)
+    sys.exit(1)
+
+
+def import_gtk():
+    import gi
+
+    gi.require_version("Gtk", "4.0")
+    gi.require_version("Adw", "1")
+    from gi.repository import Adw, Gdk, GLib, Gtk
+
+    return Adw, Gdk, GLib, Gtk
+
+
+Adw, Gdk, GLib, Gtk = import_gtk()
+
+
+class SetupWizard(Adw.Application):
+    def __init__(self):
+        super().__init__(application_id="os.alex.setup")
+        self.window = None
+        self.countdown = 3
+
+    def do_activate(self):
+        self.install_css()
+
+        self.window = Adw.ApplicationWindow(application=self)
+        self.window.set_title("Set Up AlexOS")
+        self.window.set_default_size(520, 560)
+        self.window.set_resizable(False)
+
+        self.stack = Gtk.Stack()
+        self.stack.set_transition_type(Gtk.StackTransitionType.SLIDE_LEFT_RIGHT)
+        self.stack.set_transition_duration(260)
+        self.stack.add_named(self.welcome_page(), "welcome")
+        self.stack.add_named(self.account_page(), "account")
+        self.stack.add_named(self.success_page(), "success")
+
+        self.window.set_content(self.stack)
+        self.window.present()
+
+    def install_css(self):
+        css = b"""
+        window {
+          background: #101923;
+        }
+        .setup-page {
+          background: #101923;
+          color: #f7fbff;
+        }
+        .title {
+          font-size: 28px;
+          font-weight: 700;
+        }
+        .subtitle {
+          color: #b9c7d6;
+          font-size: 16px;
+        }
+        .field-label {
+          font-size: 15px;
+          font-weight: 700;
+        }
+        .logo-word {
+          color: #e0fbfc;
+          font-size: 32px;
+          font-weight: 700;
+        }
+        .error-label {
+          color: #ffb4ab;
+          min-height: 36px;
+          font-size: 15px;
+        }
+        .success-icon {
+          color: #7ee787;
+          font-size: 64px;
+        }
+        entry {
+          min-height: 42px;
+          font-size: 16px;
+        }
+        button {
+          min-height: 42px;
+          padding-left: 18px;
+          padding-right: 18px;
+        }
+        """
+        provider = Gtk.CssProvider()
+        provider.load_from_data(css)
+        display = Gdk.Display.get_default()
+        if display is not None:
+            Gtk.StyleContext.add_provider_for_display(
+                display,
+                provider,
+                Gtk.STYLE_PROVIDER_PRIORITY_APPLICATION,
+            )
+
+    def page_shell(self):
+        clamp = Adw.Clamp()
+        clamp.set_maximum_size(460)
+        clamp.set_tightening_threshold(360)
+
+        box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=16)
+        box.add_css_class("setup-page")
+        box.set_margin_top(34)
+        box.set_margin_bottom(34)
+        box.set_margin_start(28)
+        box.set_margin_end(28)
+        clamp.set_child(box)
+        return clamp, box
+
+    def make_logo(self):
+        try:
+            texture = Gdk.Texture.new_from_bytes(GLib.Bytes.new(LOGO_SVG.encode("utf-8")))
+            image = Gtk.Image.new_from_paintable(texture)
+            image.set_pixel_size(110)
+            return image
+        except Exception:
+            label = Gtk.Label(label="ALEXOS")
+            label.add_css_class("logo-word")
+            return label
+
+    def welcome_page(self):
+        clamp, box = self.page_shell()
+        box.set_valign(Gtk.Align.CENTER)
+
+        logo = self.make_logo()
+        logo.set_halign(Gtk.Align.CENTER)
+        box.append(logo)
+
+        title = Gtk.Label(label="Hi! This is AlexOS")
+        title.add_css_class("title")
+        title.set_justify(Gtk.Justification.CENTER)
+        title.set_wrap(True)
+        box.append(title)
+
+        subtitle = Gtk.Label(label="Make one account. Then you can start using the computer.")
+        subtitle.add_css_class("subtitle")
+        subtitle.set_wrap(True)
+        subtitle.set_justify(Gtk.Justification.CENTER)
+        box.append(subtitle)
+
+        button = Gtk.Button(label="Start")
+        button.add_css_class("suggested-action")
+        button.set_halign(Gtk.Align.CENTER)
+        button.connect("clicked", lambda _button: self.stack.set_visible_child_name("account"))
+        box.append(button)
+
+        return clamp
+
+    def labeled_entry(self, label_text, entry):
+        box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=6)
+        label = Gtk.Label(label=label_text)
+        label.add_css_class("field-label")
+        label.set_xalign(0)
+        entry.set_hexpand(True)
+        box.append(label)
+        box.append(entry)
+        return box
+
+    def password_entry(self):
+        entry = Gtk.Entry()
+        entry.set_visibility(False)
+        entry.set_input_purpose(Gtk.InputPurpose.PASSWORD)
+        return entry
+
+    def account_page(self):
+        clamp, box = self.page_shell()
+
+        title = Gtk.Label(label="Who will use this?")
+        title.add_css_class("title")
+        title.set_xalign(0)
+        title.set_wrap(True)
+        box.append(title)
+
+        self.username_entry = Gtk.Entry()
+        self.username_entry.set_placeholder_text("alex")
+        box.append(self.labeled_entry("Login name", self.username_entry))
+
+        self.fullname_entry = Gtk.Entry()
+        self.fullname_entry.set_placeholder_text("Alex")
+        box.append(self.labeled_entry("Your name", self.fullname_entry))
+
+        self.password_entry_widget = self.password_entry()
+        box.append(self.labeled_entry("Secret password", self.password_entry_widget))
+
+        self.confirm_entry = self.password_entry()
+        box.append(self.labeled_entry("Type it again", self.confirm_entry))
+
+        self.admin_check = Gtk.CheckButton(label="Can install apps and change settings")
+        self.admin_check.set_active(True)
+        box.append(self.admin_check)
+
+        self.error_label = Gtk.Label(label="")
+        self.error_label.add_css_class("error-label")
+        self.error_label.set_wrap(True)
+        self.error_label.set_xalign(0)
+        box.append(self.error_label)
+
+        self.create_button = Gtk.Button(label="Done")
+        self.create_button.add_css_class("suggested-action")
+        self.create_button.set_halign(Gtk.Align.END)
+        self.create_button.connect("clicked", self.on_create_account)
+        box.append(self.create_button)
+
+        return clamp
+
+    def success_page(self):
+        clamp, box = self.page_shell()
+        box.set_valign(Gtk.Align.CENTER)
+
+        icon = Gtk.Image.new_from_icon_name("emblem-ok-symbolic")
+        icon.set_pixel_size(72)
+        icon.add_css_class("success-icon")
+        icon.set_halign(Gtk.Align.CENTER)
+        box.append(icon)
+
+        title = Gtk.Label(label="All set!")
+        title.add_css_class("title")
+        title.set_justify(Gtk.Justification.CENTER)
+        box.append(title)
+
+        self.success_label = Gtk.Label(label="The login screen will open soon.")
+        self.success_label.add_css_class("subtitle")
+        self.success_label.set_justify(Gtk.Justification.CENTER)
+        box.append(self.success_label)
+
+        return clamp
+
+    def validate(self):
+        username = self.username_entry.get_text().strip()
+        fullname = self.fullname_entry.get_text().strip() or username
+        password = self.password_entry_widget.get_text()
+        confirm = self.confirm_entry.get_text()
+
+        if not USERNAME_RE.match(username):
+            raise ValueError("Login name: use small letters and numbers. Start with a letter.")
+        if username in {"root", LIVE_USER}:
+            raise ValueError("Pick a different login name.")
+        if ":" in fullname or "\n" in fullname:
+            raise ValueError("Your name has a character AlexOS cannot use.")
+        if len(password) < 8:
+            raise ValueError("Password: use 8 or more letters, numbers, or symbols.")
+        if ":" in password or "\n" in password:
+            raise ValueError("Password has a character AlexOS cannot use.")
+        if password != confirm:
+            raise ValueError("The two passwords are not the same.")
+        if subprocess.run([ID, "-u", username], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL).returncode == 0:
+            raise ValueError("That login name is already taken.")
+
+        return username, fullname, password, self.admin_check.get_active()
+
+    def run_privileged(self, args, input_text=None):
+        attempts = []
+        if os.geteuid() == 0:
+            attempts.append(args)
+        else:
+            attempts.append(["sudo", "-n", *args])
+            attempts.append(["pkexec", *args])
+
+        last_error = None
+        for command in attempts:
+            try:
+                completed = subprocess.run(
+                    command,
+                    input=input_text,
+                    text=True,
+                    stdout=subprocess.PIPE,
+                    stderr=subprocess.PIPE,
+                    check=False,
+                )
+            except FileNotFoundError as exc:
+                last_error = str(exc)
+                continue
+
+            if completed.returncode == 0:
+                return completed
+
+            last_error = completed.stderr.strip() or completed.stdout.strip()
+
+        raise RuntimeError(last_error or "AlexOS could not make the account.")
+
+    def create_account(self, username, fullname, password, grant_sudo):
+        self.run_privileged([
+            USERADD,
+            "-m",
+            "-s",
+            "/bin/bash",
+            "-c",
+            fullname,
+            username,
+        ])
+        self.run_privileged([CHPASSWD], input_text=f"{username}:{password}\n")
+
+        if grant_sudo:
+            self.run_privileged([USERMOD, "-aG", "sudo", username])
+
+        self.run_privileged([SHELL, "-s"], input_text=FINALIZE_SCRIPT)
+
+    def on_create_account(self, _button):
+        self.error_label.set_text("")
+        self.create_button.set_sensitive(False)
+
+        try:
+            username, fullname, password, grant_sudo = self.validate()
+            self.create_account(username, fullname, password, grant_sudo)
+        except Exception as exc:
+            self.error_label.set_text(str(exc))
+            self.create_button.set_sensitive(True)
+            return
+
+        self.stack.set_visible_child_name("success")
+        GLib.timeout_add_seconds(1, self.update_countdown)
+
+    def update_countdown(self):
+        self.countdown -= 1
+        if self.countdown <= 0:
+            self.success_label.set_text("Opening the login screen now.")
+            return False
+
+        second_word = "second" if self.countdown == 1 else "seconds"
+        self.success_label.set_text(f"The login screen will open in {self.countdown} {second_word}.")
+        return True
+
+
+def main():
+    if os.path.exists(SETUP_COMPLETE):
+        return 0
+
+    ensure_graphical_session()
+    lock_file = take_lock()
+
+    try:
+        app = SetupWizard()
+        return app.run(sys.argv)
+    finally:
+        lock_file.close()
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

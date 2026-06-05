@@ -1,0 +1,19 @@
+[Unit]
+Description=AlexOS First-Boot User Setup
+After=live-config.service graphical.target display-manager.service gdm.service gdm3.service
+Wants=display-manager.service
+ConditionPathExists=!/var/lib/alexos/setup-complete
+
+[Service]
+Type=simple
+User=alex
+Environment=DISPLAY=:0
+Environment=GDK_BACKEND=x11
+Environment=XDG_RUNTIME_DIR=/run/user/1000
+ExecStartPre=/bin/sleep 8
+ExecStart=/usr/local/bin/alexos-setup-wizard
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=graphical.target

@@ -1,0 +1,7 @@
+build/
+dist/*.iso
+dist/*.iso.sha256
+*.log
+__pycache__/
+*.pyc
+.DS_Store

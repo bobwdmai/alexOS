@@ -1,0 +1,8 @@
+[Desktop Entry]
+Type=Application
+Name=Set Up AlexOS
+Exec=/usr/local/bin/alexos-setup-wizard
+Icon=alexos-setup
+Terminal=false
+OnlyShowIn=GNOME;
+X-GNOME-Autostart-enabled=true
