@@ -106,8 +106,13 @@ current_commit() {
 write_state() {
   local key="$1"
   local value="$2"
-  install -d -m 0755 "${STATE_DIR}"
-  printf '%s\n' "${value}" > "${STATE_DIR}/${key}"
+
+  if (( EUID != 0 )) && [[ ! -w "${STATE_DIR}" ]]; then
+    return
+  fi
+
+  install -d -m 0755 "${STATE_DIR}" 2>/dev/null || return
+  printf '%s\n' "${value}" > "${STATE_DIR}/${key}" 2>/dev/null || true
 }
 
 apply_overlay() {
