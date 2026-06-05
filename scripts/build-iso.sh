@@ -777,12 +777,12 @@ if loadfont /boot/grub/font.pf2 ; then
 fi
 
 menuentry "AlexOS Live" {
-  linux /live/vmlinuz boot=live components live-config.username=alex live-config.hostname=alexos quiet splash
+  linux /live/vmlinuz boot=live components live-config.username=alex live-config.hostname=alexos live-config.autologin=true quiet splash
   initrd /live/initrd.img
 }
 
 menuentry "AlexOS Live (failsafe graphics)" {
-  linux /live/vmlinuz boot=live components live-config.username=alex live-config.hostname=alexos nomodeset noapic noacpi
+  linux /live/vmlinuz boot=live components live-config.username=alex live-config.hostname=alexos live-config.autologin=true nomodeset noapic noacpi
   initrd /live/initrd.img
 }
 EOF

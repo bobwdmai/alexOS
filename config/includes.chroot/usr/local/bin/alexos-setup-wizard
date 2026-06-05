@@ -26,8 +26,9 @@ LOGO_SVG = """\
 
 GDM_COMPLETE_CONFIG = """\
 [daemon]
-WaylandEnable=false
-AutomaticLoginEnable=false
+WaylandEnable = false
+AutomaticLoginEnable = false
+TimedLoginEnable = false
 """
 
 FINALIZE_SCRIPT = f"""\
@@ -35,6 +36,9 @@ set -e
 export PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
 install -d -m 0755 /var/lib/alexos
 cat > /etc/gdm3/custom.conf <<'GDMEOF'
+{GDM_COMPLETE_CONFIG.rstrip()}
+GDMEOF
+cat > /etc/gdm3/daemon.conf <<'GDMEOF'
 {GDM_COMPLETE_CONFIG.rstrip()}
 GDMEOF
 touch {SETUP_COMPLETE}
