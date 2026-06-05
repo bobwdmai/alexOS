@@ -45,10 +45,14 @@ if [[ ! -f "${ISO}" ]]; then
 fi
 
 mkdir -p dist
-(
-  cd dist
-  sha256sum "$(basename "${ISO}")" > "$(basename "${CHECKSUM}")"
-)
+if [[ ! -f "${CHECKSUM}" || -w "${CHECKSUM}" ]]; then
+  (
+    cd dist
+    sha256sum "$(basename "${ISO}")" > "$(basename "${CHECKSUM}")"
+  )
+else
+  echo "Using existing checksum: ${CHECKSUM}"
+fi
 
 title="AlexOS ${VERSION}"
 notes="AlexOS ${VERSION}
