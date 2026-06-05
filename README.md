@@ -1,6 +1,6 @@
 # AlexOS
 
-AlexOS is a Debian Bookworm live ISO with a simple first-boot setup flow, GNOME desktop defaults, pro creative/CAD tools, and a custom `blueprint-WhiteSur-dark-GNOME` icon theme.
+AlexOS is a Debian-based live ISO with a simple first-boot setup flow, GNOME desktop defaults, pro creative/CAD tools, an AlexOS Software & Updates app, and a custom `blueprint-WhiteSur-dark-GNOME` icon theme.
 
 ## Build
 

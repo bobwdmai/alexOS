@@ -1,0 +1,10 @@
+[Desktop Entry]
+Type=Application
+Name=AlexOS Software & Updates
+GenericName=Software & Updates
+Comment=Install apps and update AlexOS
+Exec=/usr/local/bin/alexos-software-updates
+Icon=alexos-software-updates
+Terminal=false
+Categories=Settings;PackageManager;
+Keywords=AlexOS;Software;Updates;Apps;

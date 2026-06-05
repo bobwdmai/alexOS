@@ -1,0 +1,237 @@
+#!/usr/bin/env python3
+import os
+import shutil
+import subprocess
+import sys
+import threading
+
+import gi
+
+gi.require_version("Gtk", "4.0")
+gi.require_version("Adw", "1")
+from gi.repository import Adw, GLib, Gtk
+
+
+APP_ID = "os.alex.softwareupdates"
+ALEXOS_UPDATE = "/usr/local/sbin/alexos-update"
+
+
+def command_exists(command):
+    return shutil.which(command) is not None
+
+
+class SoftwareUpdatesApp(Adw.Application):
+    def __init__(self):
+        super().__init__(application_id=APP_ID)
+        self.window = None
+        self.buttons = []
+
+    def do_activate(self):
+        self.window = Adw.ApplicationWindow(application=self)
+        self.window.set_title("AlexOS Software & Updates")
+        self.window.set_default_size(640, 520)
+
+        header = Adw.HeaderBar()
+
+        root = Gtk.Box(orientation=Gtk.Orientation.VERTICAL)
+        root.append(header)
+        root.append(self.build_page())
+
+        self.window.set_content(root)
+        self.window.present()
+
+    def build_page(self):
+        outer = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=18)
+        outer.set_margin_top(28)
+        outer.set_margin_bottom(28)
+        outer.set_margin_start(28)
+        outer.set_margin_end(28)
+
+        title_row = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=14)
+        title_row.set_valign(Gtk.Align.CENTER)
+
+        icon = Gtk.Image.new_from_icon_name("alexos-software-updates")
+        icon.set_pixel_size(64)
+        title_row.append(icon)
+
+        title_box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=4)
+        title = Gtk.Label(label="AlexOS Software & Updates")
+        title.add_css_class("title-1")
+        title.set_xalign(0)
+        title.set_wrap(True)
+        subtitle = Gtk.Label(label="Apps, system updates, and AlexOS updates.")
+        subtitle.add_css_class("dim-label")
+        subtitle.set_xalign(0)
+        subtitle.set_wrap(True)
+        title_box.append(title)
+        title_box.append(subtitle)
+        title_row.append(title_box)
+        outer.append(title_row)
+
+        grid = Gtk.Grid()
+        grid.set_column_spacing(12)
+        grid.set_row_spacing(12)
+        grid.set_column_homogeneous(True)
+
+        browse = self.make_button("software-store-symbolic", "Browse Apps", self.open_apps)
+        system_updates = self.make_button("system-software-update-symbolic", "System Updates", self.open_system_updates)
+        check = self.make_button("view-refresh-symbolic", "Check AlexOS", self.check_alexos)
+        apply = self.make_button("emblem-ok-symbolic", "Install AlexOS", self.apply_alexos)
+
+        grid.attach(browse, 0, 0, 1, 1)
+        grid.attach(system_updates, 1, 0, 1, 1)
+        grid.attach(check, 0, 1, 1, 1)
+        grid.attach(apply, 1, 1, 1, 1)
+        outer.append(grid)
+
+        self.status = Gtk.Label(label="Ready")
+        self.status.set_xalign(0)
+        self.status.add_css_class("heading")
+        outer.append(self.status)
+
+        scroller = Gtk.ScrolledWindow()
+        scroller.set_vexpand(True)
+        scroller.set_min_content_height(190)
+
+        self.output = Gtk.TextView()
+        self.output.set_editable(False)
+        self.output.set_cursor_visible(False)
+        self.output.set_monospace(True)
+        self.output.set_wrap_mode(Gtk.WrapMode.WORD_CHAR)
+        self.output.add_css_class("view")
+        scroller.set_child(self.output)
+        outer.append(scroller)
+
+        self.set_output("AlexOS update checks use the public AlexOS GitHub repo.")
+        return outer
+
+    def make_button(self, icon_name, label, callback):
+        button = Gtk.Button()
+        button.set_hexpand(True)
+        button.set_vexpand(False)
+        button.add_css_class("suggested-action" if "AlexOS" in label else "flat")
+        button.connect("clicked", callback)
+
+        box = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=10)
+        box.set_halign(Gtk.Align.CENTER)
+        image = Gtk.Image.new_from_icon_name(icon_name)
+        image.set_pixel_size(22)
+        text = Gtk.Label(label=label)
+        text.set_wrap(True)
+        box.append(image)
+        box.append(text)
+        button.set_child(box)
+
+        self.buttons.append(button)
+        return button
+
+    def set_busy(self, busy):
+        for button in self.buttons:
+            button.set_sensitive(not busy)
+
+    def set_status(self, text):
+        self.status.set_text(text)
+
+    def set_output(self, text):
+        buffer = self.output.get_buffer()
+        buffer.set_text(text)
+
+    def append_output(self, text):
+        buffer = self.output.get_buffer()
+        start, end = buffer.get_bounds()
+        current = buffer.get_text(start, end, False)
+        if current:
+            current += "\n"
+        buffer.set_text(current + text)
+
+    def open_apps(self, _button):
+        self.launch(["gnome-software"], "Opened AlexOS apps.")
+
+    def open_system_updates(self, _button):
+        if command_exists("gnome-software"):
+            self.launch(["gnome-software", "--mode=updates"], "Opened AlexOS system updates.")
+            return
+
+        self.set_status("Software app not found")
+        self.set_output("GNOME Software is not installed.")
+
+    def check_alexos(self, _button):
+        self.run_command([ALEXOS_UPDATE, "check"], "Checking AlexOS updates...", allow_update_available=True)
+
+    def apply_alexos(self, _button):
+        if os.geteuid() == 0:
+            command = [ALEXOS_UPDATE, "apply"]
+        elif command_exists("pkexec"):
+            command = ["pkexec", ALEXOS_UPDATE, "apply"]
+        elif command_exists("sudo"):
+            command = ["sudo", ALEXOS_UPDATE, "apply"]
+        else:
+            self.set_status("Administrator access needed")
+            self.set_output("AlexOS could not find pkexec or sudo.")
+            return
+
+        self.run_command(command, "Installing AlexOS updates...")
+
+    def launch(self, command, success_message):
+        try:
+            subprocess.Popen(command)
+        except FileNotFoundError:
+            self.set_status("App not found")
+            self.set_output(f"Could not start: {' '.join(command)}")
+            return
+        except Exception as exc:
+            self.set_status("Could not open")
+            self.set_output(str(exc))
+            return
+
+        self.set_status(success_message)
+        self.set_output(success_message)
+
+    def run_command(self, command, waiting_text, allow_update_available=False):
+        self.set_busy(True)
+        self.set_status(waiting_text)
+        self.set_output(waiting_text)
+
+        def worker():
+            try:
+                completed = subprocess.run(
+                    command,
+                    text=True,
+                    stdout=subprocess.PIPE,
+                    stderr=subprocess.STDOUT,
+                    check=False,
+                )
+                output = completed.stdout.strip()
+                code = completed.returncode
+            except FileNotFoundError:
+                output = f"Could not find: {command[0]}"
+                code = 127
+            except Exception as exc:
+                output = str(exc)
+                code = 1
+
+            GLib.idle_add(self.finish_command, code, output, allow_update_available)
+
+        threading.Thread(target=worker, daemon=True).start()
+
+    def finish_command(self, code, output, allow_update_available):
+        self.set_busy(False)
+
+        if code == 0:
+            self.set_status("AlexOS is up to date")
+        elif allow_update_available and code == 100:
+            self.set_status("AlexOS update available")
+        else:
+            self.set_status("Could not finish")
+
+        self.set_output(output or "Done.")
+        return False
+
+
+def main():
+    app = SoftwareUpdatesApp()
+    return app.run(sys.argv)
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

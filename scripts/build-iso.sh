@@ -377,22 +377,30 @@ write_blueprint_icon() {
 <?xml version="1.0" encoding="UTF-8"?>
 <svg xmlns="http://www.w3.org/2000/svg" width="128" height="128" viewBox="0 0 128 128">
   <defs>
-    <linearGradient id="plate" x1="18" y1="16" x2="110" y2="116" gradientUnits="userSpaceOnUse">
-      <stop offset="0" stop-color="#112b3c"/>
-      <stop offset="1" stop-color="#07131f"/>
+    <linearGradient id="plate" x1="16" y1="12" x2="114" y2="116" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#15384a"/>
+      <stop offset="0.52" stop-color="#0b2230"/>
+      <stop offset="1" stop-color="#06111d"/>
     </linearGradient>
+    <radialGradient id="glow" cx="34" cy="28" r="72" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="${accent}" stop-opacity="0.32"/>
+      <stop offset="1" stop-color="${accent}" stop-opacity="0"/>
+    </radialGradient>
     <filter id="soft" x="-20%" y="-20%" width="140%" height="140%">
-      <feDropShadow dx="0" dy="8" stdDeviation="7" flood-color="#000814" flood-opacity="0.38"/>
+      <feDropShadow dx="0" dy="10" stdDeviation="8" flood-color="#000814" flood-opacity="0.42"/>
     </filter>
   </defs>
-  <rect x="10" y="10" width="108" height="108" rx="24" fill="url(#plate)" filter="url(#soft)"/>
-  <path d="M28 24v80M48 24v80M68 24v80M88 24v80M24 40h80M24 60h80M24 80h80M24 100h80"
-        fill="none" stroke="#24455a" stroke-width="1.5" opacity="0.58"/>
-  <rect x="21" y="21" width="86" height="86" rx="18" fill="none" stroke="#4cc9f0" stroke-width="3"/>
-  <path d="${glyph}" fill="none" stroke="${accent}" stroke-width="7" stroke-linecap="round" stroke-linejoin="round"/>
-  <text x="64" y="103" text-anchor="middle"
-        font-family="Cantarell, Inter, Arial, sans-serif" font-size="18" font-weight="800"
+  <rect x="9" y="9" width="110" height="110" rx="25" fill="url(#plate)" filter="url(#soft)"/>
+  <rect x="9" y="9" width="110" height="110" rx="25" fill="url(#glow)"/>
+  <path d="M28 22v84M48 22v84M68 22v84M88 22v84M22 40h84M22 60h84M22 80h84M22 100h84"
+        fill="none" stroke="#31546a" stroke-width="1.3" opacity="0.52"/>
+  <rect x="20" y="20" width="88" height="88" rx="20" fill="none" stroke="#72e6ff" stroke-width="2.4" opacity="0.9"/>
+  <rect x="26" y="25" width="52" height="21" rx="7" fill="#06111d" opacity="0.7" stroke="${accent}" stroke-width="1.6"/>
+  <text x="52" y="40" text-anchor="middle"
+        font-family="Cantarell, Inter, Arial, sans-serif" font-size="10.5" font-weight="800"
         fill="#e8fbff">${label}</text>
+  <path d="${glyph}" fill="none" stroke="#dffbff" stroke-width="10" stroke-linecap="round" stroke-linejoin="round" opacity="0.16"/>
+  <path d="${glyph}" fill="none" stroke="${accent}" stroke-width="7" stroke-linecap="round" stroke-linejoin="round"/>
 </svg>
 EOF
 }
@@ -480,6 +488,7 @@ EOF
   write_blueprint_icon "${apps_dir}/libreoffice-math.svg" "MATH" "#a3e635" "M43 42h43M43 86h43M51 52l26 24M77 52L51 76"
   write_blueprint_icon "${apps_dir}/org.gnome.TextEditor.svg" "TXT" "#93c5fd" "M44 35h30l14 14v43H44zM74 35v15h14M54 62h22M54 76h18"
   write_blueprint_icon "${apps_dir}/org.gnome.Software.svg" "APP" "#facc15" "M42 50h44v37H42zM52 50a12 12 0 0 1 24 0M52 65h24"
+  write_blueprint_icon "${apps_dir}/alexos-software-updates.svg" "UPD" "#22d3ee" "M40 66a24 24 0 0 1 41-17M81 49h-16M81 49v-16M88 66a24 24 0 0 1-41 17M47 83h16M47 83v16M57 66h14"
   write_blueprint_icon "${apps_dir}/gimp.svg" "ART" "#fbbf24" "M45 85c18-5 24-25 38-44M80 38l10 10M42 88l17-5"
   write_blueprint_icon "${apps_dir}/blender.svg" "3D" "#fb923c" "M40 65h28M54 51l14 14l-14 14M68 65a15 15 0 1 0 30 0a15 15 0 0 0-30 0"
   write_blueprint_icon "${apps_dir}/scribus.svg" "PAGE" "#818cf8" "M45 36h28l14 14v42H45zM73 36v15h14M55 64h22M55 78h18"
@@ -492,6 +501,8 @@ EOF
   write_blueprint_icon "${apps_dir}/org.gnome.Extensions.svg" "ADD" "#34d399" "M64 42v44M42 64h44M48 48l32 32M80 48L48 80"
   write_blueprint_icon "${apps_dir}/snap-store.svg" "STORE" "#facc15" "M42 50h44v37H42zM52 50a12 12 0 0 1 24 0M56 70h16"
   cp "${apps_dir}/org.gnome.Software.svg" "${apps_dir}/system-software-install.svg"
+  cp "${apps_dir}/alexos-software-updates.svg" "${apps_dir}/system-software-update.svg"
+  cp "${apps_dir}/alexos-software-updates.svg" "${apps_dir}/software-properties.svg"
   cp "${apps_dir}/snap-store.svg" "${apps_dir}/io.snapcraft.Store.svg"
 
   write_blueprint_icon "${places_dir}/folder.svg" "DIR" "#60a5fa" "M36 44h25l9 10h24v36H36zM42 63h44"
@@ -591,6 +602,35 @@ ALEXOS_ICON_THEME="${ALEXOS_ICON_THEME}"
 EOF
 }
 
+configure_os_branding() {
+  log "Writing AlexOS OS branding"
+  local version_id="${ALEXOS_VERSION#v}"
+
+  install -d "${CHROOT_DIR}/usr/lib"
+  cat > "${CHROOT_DIR}/usr/lib/os-release" <<EOF
+PRETTY_NAME="AlexOS"
+NAME="AlexOS"
+VERSION_ID="${version_id}"
+VERSION="${ALEXOS_VERSION}"
+ID=alexos
+ID_LIKE=debian
+HOME_URL="https://github.com/${ALEXOS_UPDATE_REPO}"
+SUPPORT_URL="https://github.com/${ALEXOS_UPDATE_REPO}/issues"
+BUG_REPORT_URL="https://github.com/${ALEXOS_UPDATE_REPO}/issues"
+EOF
+  ln -sf ../usr/lib/os-release "${CHROOT_DIR}/etc/os-release"
+
+  cat > "${CHROOT_DIR}/etc/lsb-release" <<EOF
+DISTRIB_ID=AlexOS
+DISTRIB_RELEASE=${version_id}
+DISTRIB_CODENAME=alexos
+DISTRIB_DESCRIPTION="AlexOS"
+EOF
+
+  printf 'AlexOS \\n \\l\n' > "${CHROOT_DIR}/etc/issue"
+  printf 'AlexOS\n' > "${CHROOT_DIR}/etc/issue.net"
+}
+
 configure_locale_timezone() {
   log "Configuring locale and timezone"
   echo "en_US.UTF-8 UTF-8" > "${CHROOT_DIR}/etc/locale.gen"
@@ -637,7 +677,7 @@ secondary-color='#00b4d8'
 
 [org/gnome/shell]
 enabled-extensions=['dash-to-dock@micxgx.gmail.com','user-theme@gnome-shell-extensions.gcampax.github.com']
-favorite-apps=['google-chrome.desktop','org.gnome.Nautilus.desktop','librecad.desktop','freecad.desktop','org.inkscape.Inkscape.desktop','libreoffice-draw.desktop','org.gnome.TextEditor.desktop','org.gnome.Software.desktop']
+favorite-apps=['google-chrome.desktop','org.gnome.Nautilus.desktop','librecad.desktop','freecad.desktop','org.inkscape.Inkscape.desktop','libreoffice-draw.desktop','org.gnome.TextEditor.desktop','alexos-software-updates.desktop']
 
 [org/gnome/shell/extensions/user-theme]
 name='WhiteSur-Dark'
@@ -660,6 +700,7 @@ configure_permissions() {
   log "Setting overlay permissions"
   local executable_paths=(
     /usr/local/bin/alexos-setup-wizard
+    /usr/local/bin/alexos-software-updates
     /usr/local/bin/alexos-welcome
     /usr/local/sbin/alexos-update
     /usr/local/sbin/alexos-install-snap-store
@@ -832,6 +873,7 @@ main() {
   install_blueprint_icon_theme
   apply_overlay
   configure_alexos_metadata
+  configure_os_branding
   configure_locale_timezone
   configure_dconf
   configure_permissions

@@ -58,7 +58,7 @@ python3-gi
 gir1.2-gtk-4.0
 gir1.2-adw-1
 
-# Debian Bookworm stable does not publish these VirtualBox guest packages.
+# Debian stable does not publish these VirtualBox guest packages.
 # Keep QEMU testing on virtio through scripts/run-qemu.sh.
 # virtualbox-guest-utils
 # virtualbox-guest-x11

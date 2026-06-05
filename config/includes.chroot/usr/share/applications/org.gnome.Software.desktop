@@ -1,0 +1,8 @@
+[Desktop Entry]
+Type=Application
+Name=GNOME Software
+Exec=gnome-software
+Icon=org.gnome.Software
+Terminal=false
+NoDisplay=true
+Categories=Settings;PackageManager;

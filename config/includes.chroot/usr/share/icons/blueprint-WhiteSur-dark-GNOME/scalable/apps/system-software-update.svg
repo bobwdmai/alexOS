@@ -1,0 +1,30 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" width="128" height="128" viewBox="0 0 128 128">
+  <defs>
+    <linearGradient id="plate" x1="16" y1="12" x2="114" y2="116" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#15384a"/>
+      <stop offset="0.52" stop-color="#0b2230"/>
+      <stop offset="1" stop-color="#06111d"/>
+    </linearGradient>
+    <radialGradient id="glow" cx="34" cy="28" r="72" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#22d3ee" stop-opacity="0.32"/>
+      <stop offset="1" stop-color="#22d3ee" stop-opacity="0"/>
+    </radialGradient>
+    <filter id="soft" x="-20%" y="-20%" width="140%" height="140%">
+      <feDropShadow dx="0" dy="10" stdDeviation="8" flood-color="#000814" flood-opacity="0.42"/>
+    </filter>
+  </defs>
+  <rect x="9" y="9" width="110" height="110" rx="25" fill="url(#plate)" filter="url(#soft)"/>
+  <rect x="9" y="9" width="110" height="110" rx="25" fill="url(#glow)"/>
+  <path d="M28 22v84M48 22v84M68 22v84M88 22v84M22 40h84M22 60h84M22 80h84M22 100h84"
+        fill="none" stroke="#31546a" stroke-width="1.3" opacity="0.52"/>
+  <rect x="20" y="20" width="88" height="88" rx="20" fill="none" stroke="#72e6ff" stroke-width="2.4" opacity="0.9"/>
+  <rect x="26" y="25" width="52" height="21" rx="7" fill="#06111d" opacity="0.7" stroke="#22d3ee" stroke-width="1.6"/>
+  <text x="52" y="40" text-anchor="middle"
+        font-family="Cantarell, Inter, Arial, sans-serif" font-size="10.5" font-weight="800"
+        fill="#e8fbff">UPD</text>
+  <path d="M40 66a24 24 0 0 1 41-17M81 49h-16M81 49v-16M88 66a24 24 0 0 1-41 17M47 83h16M47 83v16M57 66h14"
+        fill="none" stroke="#dffbff" stroke-width="10" stroke-linecap="round" stroke-linejoin="round" opacity="0.16"/>
+  <path d="M40 66a24 24 0 0 1 41-17M81 49h-16M81 49v-16M88 66a24 24 0 0 1-41 17M47 83h16M47 83v16M57 66h14"
+        fill="none" stroke="#22d3ee" stroke-width="7" stroke-linecap="round" stroke-linejoin="round"/>
+</svg>
