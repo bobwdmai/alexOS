@@ -1,0 +1,10 @@
+[Desktop Entry]
+Type=Application
+Name=AlexOS Studio
+GenericName=AlexOS App Hub
+Comment=Open AlexOS tools
+Exec=/usr/local/bin/alexos-studio
+Icon=alexos-studio
+Terminal=false
+Categories=Utility;
+Keywords=AlexOS;Studio;Tools;Apps;

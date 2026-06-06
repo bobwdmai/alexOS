@@ -432,6 +432,12 @@ write_blueprint_icon() {
 EOF
 }
 
+write_alexos_compass_logo() {
+  local output="$1"
+  local accent="$2"
+  write_blueprint_icon "${output}" "A" "${accent}" "M64 34L40 96M64 34L88 96M50 72H78M58 34a6 6 0 1 0 12 0a6 6 0 0 0-12 0M42 96q22 13 44 0"
+}
+
 install_blueprint_icon_theme() {
   log "Installing ${ALEXOS_ICON_THEME} icon theme"
   local icon_root="${CHROOT_DIR}/usr/share/icons/${ALEXOS_ICON_THEME}"
@@ -500,7 +506,11 @@ Type=Scalable
 Context=MimeTypes
 EOF
 
-  write_blueprint_icon "${apps_dir}/alexos-setup.svg" "GO" "#7dd3fc" "M42 46h44M42 64h44M42 82h28"
+  write_alexos_compass_logo "${apps_dir}/alexos-logo.svg" "#7dd3fc"
+  cp "${apps_dir}/alexos-logo.svg" "${apps_dir}/alexos-setup.svg"
+  cp "${apps_dir}/alexos-logo.svg" "${apps_dir}/alexos-studio.svg"
+  cp "${apps_dir}/alexos-logo.svg" "${apps_dir}/distributor-logo-alexos.svg"
+  cp "${apps_dir}/alexos-logo.svg" "${places_dir}/start-here.svg"
   write_blueprint_icon "${apps_dir}/google-chrome.svg" "WEB" "#34d399" "M64 34a30 30 0 1 1 0 60a30 30 0 0 1 0-60M64 49a15 15 0 1 1 0 30a15 15 0 0 1 0-30M39 51h50M64 64l19 29M64 64L46 92"
   write_blueprint_icon "${apps_dir}/org.gnome.Nautilus.svg" "FILE" "#60a5fa" "M38 38h25l9 10h20v42H38zM48 60h31M48 74h31"
   write_blueprint_icon "${apps_dir}/librecad.svg" "CAD" "#22d3ee" "M39 88l22-48l29 48zM52 72h27M39 88h51"
@@ -704,7 +714,7 @@ secondary-color='#00b4d8'
 
 [org/gnome/shell]
 enabled-extensions=['dash-to-dock@micxgx.gmail.com','user-theme@gnome-shell-extensions.gcampax.github.com']
-favorite-apps=['google-chrome.desktop','org.gnome.Nautilus.desktop','librecad.desktop','freecad.desktop','org.inkscape.Inkscape.desktop','libreoffice-draw.desktop','org.gnome.TextEditor.desktop','alexos-software-updates.desktop']
+favorite-apps=['alexos-studio.desktop','google-chrome.desktop','org.gnome.Nautilus.desktop','librecad.desktop','freecad.desktop','org.inkscape.Inkscape.desktop','libreoffice-draw.desktop','org.gnome.TextEditor.desktop','alexos-software-updates.desktop']
 
 [org/gnome/shell/extensions/user-theme]
 name='WhiteSur-Dark'
@@ -728,6 +738,7 @@ configure_permissions() {
   local executable_paths=(
     /usr/local/bin/alexos-setup-wizard
     /usr/local/bin/alexos-software-updates
+    /usr/local/bin/alexos-studio
     /usr/local/bin/alexos-welcome
     /usr/local/sbin/alexos-update
     /usr/local/sbin/alexos-install-snap-store

@@ -15,15 +15,6 @@ USERADD = "/usr/sbin/useradd"
 CHPASSWD = "/usr/sbin/chpasswd"
 USERMOD = "/usr/sbin/usermod"
 
-LOGO_SVG = """\
-<svg xmlns="http://www.w3.org/2000/svg" width="160" height="160" viewBox="0 0 160 160">
-  <rect width="160" height="160" rx="36" fill="#0d1b2a"/>
-  <path d="M80 24 L104 126 H88 L83 104 H54 L49 126 H33 L57 24 Z" fill="#e0fbfc"/>
-  <path d="M58 90 H80 L69 43 Z" fill="#00b4d8"/>
-  <circle cx="80" cy="80" r="61" fill="none" stroke="#00b4d8" stroke-width="3" opacity="0.55"/>
-</svg>
-"""
-
 GDM_COMPLETE_CONFIG = """\
 [daemon]
 WaylandEnable = false
@@ -173,15 +164,18 @@ class SetupWizard(Adw.Application):
         return clamp, box
 
     def make_logo(self):
-        try:
-            texture = Gdk.Texture.new_from_bytes(GLib.Bytes.new(LOGO_SVG.encode("utf-8")))
-            image = Gtk.Image.new_from_paintable(texture)
-            image.set_pixel_size(110)
-            return image
-        except Exception:
-            label = Gtk.Label(label="ALEXOS")
-            label.add_css_class("logo-word")
-            return label
+        display = Gdk.Display.get_default()
+        if display is not None:
+            icon_theme = Gtk.IconTheme.get_for_display(display)
+            for icon_name in ("alexos-logo", "alexos-setup"):
+                if icon_theme.has_icon(icon_name):
+                    image = Gtk.Image.new_from_icon_name(icon_name)
+                    image.set_pixel_size(110)
+                    return image
+
+        label = Gtk.Label(label="ALEXOS")
+        label.add_css_class("logo-word")
+        return label
 
     def welcome_page(self):
         clamp, box = self.page_shell()
