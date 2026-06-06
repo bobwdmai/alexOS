@@ -59,7 +59,7 @@ class SoftwareUpdatesApp(Adw.Application):
         title.add_css_class("title-1")
         title.set_xalign(0)
         title.set_wrap(True)
-        subtitle = Gtk.Label(label="Apps, system updates, and AlexOS updates.")
+        subtitle = Gtk.Label(label="AlexOS apps, system updates, and OS updates.")
         subtitle.add_css_class("dim-label")
         subtitle.set_xalign(0)
         subtitle.set_wrap(True)
@@ -73,7 +73,7 @@ class SoftwareUpdatesApp(Adw.Application):
         grid.set_row_spacing(12)
         grid.set_column_homogeneous(True)
 
-        browse = self.make_button("software-store-symbolic", "Browse Apps", self.open_apps)
+        browse = self.make_button("software-store-symbolic", "App Store", self.open_apps)
         system_updates = self.make_button("system-software-update-symbolic", "System Updates", self.open_system_updates)
         check = self.make_button("view-refresh-symbolic", "Check AlexOS", self.check_alexos)
         apply = self.make_button("emblem-ok-symbolic", "Install AlexOS", self.apply_alexos)
@@ -145,7 +145,7 @@ class SoftwareUpdatesApp(Adw.Application):
         buffer.set_text(current + text)
 
     def open_apps(self, _button):
-        self.launch(["gnome-software"], "Opened AlexOS apps.")
+        self.launch(["/usr/local/bin/alexos-app-store"], "Opened AlexOS App Store.")
 
     def open_system_updates(self, _button):
         if command_exists("gnome-software"):

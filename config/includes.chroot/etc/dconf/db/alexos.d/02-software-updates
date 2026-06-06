@@ -1,2 +1,2 @@
 [org/gnome/shell]
-favorite-apps=['alexos-studio.desktop','google-chrome.desktop','org.gnome.Nautilus.desktop','librecad.desktop','freecad.desktop','org.inkscape.Inkscape.desktop','libreoffice-draw.desktop','org.gnome.TextEditor.desktop','alexos-software-updates.desktop']
+favorite-apps=['alexos-studio.desktop','alexos-app-store.desktop','google-chrome.desktop','alexos-files.desktop','librecad.desktop','freecad.desktop','alexos-draw.desktop','alexos-write.desktop','alexos-calc.desktop','alexos-software-updates.desktop','alexos-icon-changer.desktop']

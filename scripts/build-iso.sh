@@ -525,6 +525,7 @@ EOF
   write_blueprint_icon "${apps_dir}/libreoffice-math.svg" "MATH" "#a3e635" "M43 42h43M43 86h43M51 52l26 24M77 52L51 76"
   write_blueprint_icon "${apps_dir}/org.gnome.TextEditor.svg" "TXT" "#93c5fd" "M44 35h30l14 14v43H44zM74 35v15h14M54 62h22M54 76h18"
   write_blueprint_icon "${apps_dir}/org.gnome.Software.svg" "APP" "#facc15" "M42 50h44v37H42zM52 50a12 12 0 0 1 24 0M52 65h24"
+  write_blueprint_icon "${apps_dir}/alexos-app-store.svg" "APP" "#facc15" "M42 50h44v37H42zM52 50a12 12 0 0 1 24 0M52 65h24M56 72h16M64 64v18"
   write_blueprint_icon "${apps_dir}/alexos-software-updates.svg" "UPD" "#22d3ee" "M40 66a24 24 0 0 1 41-17M81 49h-16M81 49v-16M88 66a24 24 0 0 1-41 17M47 83h16M47 83v16M57 66h14"
   write_blueprint_icon "${apps_dir}/alexos-icon-changer.svg" "ICO" "#c084fc" "M64 35a29 29 0 1 0 0 58a14 14 0 0 0 0-28a14 14 0 0 1 0-30M50 44a5 5 0 1 0 10 0a5 5 0 0 0-10 0M68 44a5 5 0 1 0 10 0a5 5 0 0 0-10 0M85 64a5 5 0 1 0 10 0a5 5 0 0 0-10 0"
   write_blueprint_icon "${apps_dir}/alexos-write.svg"        "WRT" "#38bdf8" "M44 35h24l14 14v42H44zM68 35v15h14M52 63h24M52 76h20M52 89h14"
@@ -541,11 +542,9 @@ EOF
   write_blueprint_icon "${apps_dir}/org.gnome.FileRoller.svg" "ZIP" "#facc15" "M46 36h36v56H46zM58 36v56M64 42h6M58 50h6M64 58h6M58 66h6"
   write_blueprint_icon "${apps_dir}/org.gnome.tweaks.svg" "TUNE" "#a78bfa" "M42 52h44M42 76h44M56 52v-8M72 76v-8M56 52v8M72 76v8"
   write_blueprint_icon "${apps_dir}/org.gnome.Extensions.svg" "ADD" "#34d399" "M64 42v44M42 64h44M48 48l32 32M80 48L48 80"
-  write_blueprint_icon "${apps_dir}/snap-store.svg" "STORE" "#facc15" "M42 50h44v37H42zM52 50a12 12 0 0 1 24 0M56 70h16"
-  cp "${apps_dir}/org.gnome.Software.svg" "${apps_dir}/system-software-install.svg"
+  cp "${apps_dir}/alexos-app-store.svg" "${apps_dir}/system-software-install.svg"
   cp "${apps_dir}/alexos-software-updates.svg" "${apps_dir}/system-software-update.svg"
   cp "${apps_dir}/alexos-software-updates.svg" "${apps_dir}/software-properties.svg"
-  cp "${apps_dir}/snap-store.svg" "${apps_dir}/io.snapcraft.Store.svg"
 
   write_blueprint_icon "${places_dir}/folder.svg" "DIR" "#60a5fa" "M36 44h25l9 10h24v36H36zM42 63h44"
   cp "${places_dir}/folder.svg" "${places_dir}/folder-documents.svg"
@@ -739,7 +738,7 @@ secondary-color='#00b4d8'
 
 [org/gnome/shell]
 enabled-extensions=['dash-to-dock@micxgx.gmail.com','user-theme@gnome-shell-extensions.gcampax.github.com']
-favorite-apps=['alexos-studio.desktop','google-chrome.desktop','alexos-files.desktop','librecad.desktop','freecad.desktop','alexos-draw.desktop','alexos-write.desktop','alexos-calc.desktop','alexos-software-updates.desktop','alexos-icon-changer.desktop']
+favorite-apps=['alexos-studio.desktop','alexos-app-store.desktop','google-chrome.desktop','alexos-files.desktop','librecad.desktop','freecad.desktop','alexos-draw.desktop','alexos-write.desktop','alexos-calc.desktop','alexos-software-updates.desktop','alexos-icon-changer.desktop']
 
 [org/gnome/shell/extensions/user-theme]
 name='WhiteSur-Dark'
@@ -762,6 +761,7 @@ configure_permissions() {
   log "Setting overlay permissions"
   local executable_paths=(
     /usr/local/bin/alexos-setup-wizard
+    /usr/local/bin/alexos-app-store
     /usr/local/bin/alexos-software-updates
     /usr/local/bin/alexos-studio
     /usr/local/bin/alexos-icon-changer
@@ -770,8 +770,8 @@ configure_permissions() {
     /usr/local/bin/alexos-files
     /usr/local/bin/alexos-calc
     /usr/local/bin/alexos-welcome
+    /usr/local/sbin/alexos-app-install
     /usr/local/sbin/alexos-update
-    /usr/local/sbin/alexos-install-snap-store
   )
 
   local path
@@ -805,9 +805,7 @@ enable_services() {
     enable_service gdm.service
   fi
 
-  enable_service snapd.socket
   enable_service alexos-first-boot.service
-  enable_service alexos-snap-store.service
   enable_service alexos-update.timer
 }
 

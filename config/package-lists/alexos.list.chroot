@@ -19,7 +19,6 @@ apt-transport-https
 network-manager
 polkitd
 policykit-1
-snapd
 shared-mime-info
 desktop-file-utils
 xdg-utils
@@ -31,7 +30,6 @@ gnome-session
 gnome-control-center
 gnome-tweaks
 gnome-software
-gnome-software-plugin-snap
 gnome-terminal
 gnome-keyring
 gnome-shell-extension-dashtodock
@@ -69,7 +67,3 @@ librecad
 freecad
 gimp
 blender
-
-# Installed by alexos-snap-store.service on first boot:
-# snap-store
-# sweethome3d

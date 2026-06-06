@@ -1,0 +1,365 @@
+#!/usr/bin/env python3
+import json
+import os
+import shlex
+import shutil
+import subprocess
+import sys
+import threading
+
+import gi
+
+gi.require_version("Gtk", "4.0")
+gi.require_version("Adw", "1")
+from gi.repository import Adw, Gdk, GLib, Gtk
+
+
+APP_ID = "os.alex.appstore"
+INSTALLER = "/usr/local/sbin/alexos-app-install"
+
+APP_CSS = b"""
+window { background: #0a1929; color: #e0fbfc; }
+headerbar {
+  background: rgba(8,15,28,0.98);
+  border-bottom: 1px solid rgba(0,180,216,0.14);
+  color: #e0fbfc;
+}
+.store-title { font-size: 30px; font-weight: 800; color: #e0fbfc; }
+.muted { color: #7b98aa; }
+.app-row {
+  background: rgba(6,15,28,0.84);
+  border: 1px solid rgba(0,180,216,0.14);
+  border-radius: 8px;
+}
+.app-row:hover {
+  background: rgba(0,180,216,0.08);
+  border-color: rgba(0,180,216,0.24);
+}
+.pill {
+  background: rgba(0,180,216,0.10);
+  color: #7dd3fc;
+  border-radius: 999px;
+  padding: 4px 10px;
+  font-size: 12px;
+}
+button {
+  border-radius: 8px;
+  min-height: 38px;
+}
+button.suggested-action {
+  background: linear-gradient(135deg, #006c91, #00b4d8);
+  color: #ffffff;
+  border-color: rgba(0,180,216,0.28);
+  box-shadow: 0 2px 14px rgba(0,180,216,0.18);
+}
+"""
+
+
+def command_exists(command):
+    return shutil.which(command) is not None
+
+
+class AppStore(Adw.Application):
+    def __init__(self):
+        super().__init__(application_id=APP_ID)
+        self.window = None
+        self.status = None
+        self.listbox = None
+        self.refresh_button = None
+        self.action_buttons = []
+        self.apps = []
+
+    def do_startup(self):
+        Adw.Application.do_startup(self)
+        provider = Gtk.CssProvider()
+        provider.load_from_data(APP_CSS)
+        display = Gdk.Display.get_default()
+        if display:
+            Gtk.StyleContext.add_provider_for_display(
+                display,
+                provider,
+                Gtk.STYLE_PROVIDER_PRIORITY_APPLICATION,
+            )
+
+    def do_activate(self):
+        self.window = Adw.ApplicationWindow(application=self)
+        self.window.set_title("AlexOS App Store")
+        self.window.set_default_size(780, 620)
+
+        header = Adw.HeaderBar()
+        self.refresh_button = Gtk.Button.new_from_icon_name("view-refresh-symbolic")
+        self.refresh_button.set_tooltip_text("Refresh apps")
+        self.refresh_button.connect("clicked", self.refresh_apps)
+        header.pack_end(self.refresh_button)
+
+        root = Gtk.Box(orientation=Gtk.Orientation.VERTICAL)
+        root.append(header)
+        root.append(self.build_page())
+
+        self.window.set_content(root)
+        self.window.present()
+        self.refresh_apps()
+
+    def build_page(self):
+        outer = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=18)
+        outer.set_margin_top(24)
+        outer.set_margin_bottom(24)
+        outer.set_margin_start(24)
+        outer.set_margin_end(24)
+
+        title_row = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=14)
+        title_row.set_valign(Gtk.Align.CENTER)
+
+        icon = Gtk.Image.new_from_icon_name("alexos-app-store")
+        icon.set_pixel_size(64)
+        title_row.append(icon)
+
+        title_box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=4)
+        title = Gtk.Label(label="AlexOS App Store")
+        title.add_css_class("store-title")
+        title.set_xalign(0)
+        title.set_wrap(True)
+        subtitle = Gtk.Label(label="Apps from bobwdmai/alexOS-apps")
+        subtitle.add_css_class("muted")
+        subtitle.set_xalign(0)
+        subtitle.set_wrap(True)
+        title_box.append(title)
+        title_box.append(subtitle)
+        title_row.append(title_box)
+        outer.append(title_row)
+
+        scroller = Gtk.ScrolledWindow()
+        scroller.set_vexpand(True)
+        self.listbox = Gtk.ListBox()
+        self.listbox.set_selection_mode(Gtk.SelectionMode.NONE)
+        self.listbox.add_css_class("boxed-list")
+        scroller.set_child(self.listbox)
+        outer.append(scroller)
+
+        self.status = Gtk.Label(label="Checking apps...")
+        self.status.set_xalign(0)
+        self.status.add_css_class("muted")
+        self.status.set_wrap(True)
+        outer.append(self.status)
+        return outer
+
+    def set_busy(self, busy):
+        if self.refresh_button:
+            self.refresh_button.set_sensitive(not busy)
+        for button in self.action_buttons:
+            button.set_sensitive(not busy)
+
+    def set_status(self, text):
+        self.status.set_text(text)
+
+    def clear_rows(self):
+        child = self.listbox.get_first_child()
+        while child:
+            next_child = child.get_next_sibling()
+            self.listbox.remove(child)
+            child = next_child
+        self.action_buttons = []
+
+    def refresh_apps(self, _button=None):
+        if not os.path.exists(INSTALLER):
+            self.set_status("App installer is missing.")
+            return
+
+        self.set_busy(True)
+        self.set_status("Checking apps...")
+
+        def worker():
+            completed = subprocess.run(
+                [INSTALLER, "list-json"],
+                text=True,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                check=False,
+            )
+            GLib.idle_add(self.finish_refresh, completed.returncode, completed.stdout, completed.stderr)
+
+        threading.Thread(target=worker, daemon=True).start()
+
+    def finish_refresh(self, code, output, error):
+        self.set_busy(False)
+        if code != 0:
+            self.clear_rows()
+            self.set_status(error.strip() or "Could not load apps.")
+            return False
+
+        try:
+            payload = json.loads(output)
+        except json.JSONDecodeError as exc:
+            self.clear_rows()
+            self.set_status(f"App list was not valid JSON: {exc}")
+            return False
+
+        self.apps = payload.get("apps", [])
+        self.render_apps()
+        repo = payload.get("repo", "bobwdmai/alexOS-apps")
+        branch = payload.get("branch", "main")
+        count = len(self.apps)
+        self.set_status(f"{count} apps from {repo} ({branch})")
+        return False
+
+    def render_apps(self):
+        self.clear_rows()
+        if not self.apps:
+            empty = Gtk.Label(label="No apps found.")
+            empty.set_margin_top(32)
+            empty.set_margin_bottom(32)
+            empty.add_css_class("muted")
+            self.listbox.append(empty)
+            return
+
+        for app in self.apps:
+            self.listbox.append(self.make_row(app))
+
+    def make_row(self, app):
+        row = Gtk.ListBoxRow()
+        row.set_activatable(False)
+        row.set_selectable(False)
+        row.add_css_class("app-row")
+
+        box = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=14)
+        box.set_margin_top(14)
+        box.set_margin_bottom(14)
+        box.set_margin_start(14)
+        box.set_margin_end(14)
+        box.set_valign(Gtk.Align.CENTER)
+
+        icon_name = app.get("icon") if app.get("installed") else "alexos-app-store"
+        icon = Gtk.Image.new_from_icon_name(icon_name or "alexos-app-store")
+        icon.set_pixel_size(46)
+        box.append(icon)
+
+        info = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=5)
+        info.set_hexpand(True)
+
+        name = Gtk.Label(label=app.get("name", app.get("id", "App")))
+        name.add_css_class("heading")
+        name.set_xalign(0)
+        name.set_wrap(True)
+        info.append(name)
+
+        description_text = app.get("description") or "AlexOS app"
+        description = Gtk.Label(label=description_text)
+        description.add_css_class("muted")
+        description.set_xalign(0)
+        description.set_wrap(True)
+        info.append(description)
+
+        meta = Gtk.Label(label=app.get("category") or "AlexOS")
+        meta.add_css_class("pill")
+        meta.set_xalign(0)
+        meta.set_halign(Gtk.Align.START)
+        info.append(meta)
+        box.append(info)
+
+        action = self.make_action_button(app)
+        box.append(action)
+        row.set_child(box)
+        return row
+
+    def make_action_button(self, app):
+        installed = bool(app.get("installed"))
+        needs_update = bool(app.get("update_available"))
+        if needs_update:
+            label = "Update"
+            icon_name = "view-refresh-symbolic"
+            callback = lambda _button: self.install_app(app)
+        elif installed:
+            label = "Open"
+            icon_name = "system-run-symbolic"
+            callback = lambda _button: self.open_app(app)
+        else:
+            label = "Install"
+            icon_name = "folder-download-symbolic"
+            callback = lambda _button: self.install_app(app)
+
+        button = Gtk.Button()
+        button.connect("clicked", callback)
+        if not installed or needs_update:
+            button.add_css_class("suggested-action")
+
+        content = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=8)
+        content.set_halign(Gtk.Align.CENTER)
+        image = Gtk.Image.new_from_icon_name(icon_name)
+        image.set_pixel_size(18)
+        text = Gtk.Label(label=label)
+        content.append(image)
+        content.append(text)
+        button.set_child(content)
+        self.action_buttons.append(button)
+        return button
+
+    def install_app(self, app):
+        app_id = app.get("id")
+        if not app_id:
+            self.set_status("App is missing an id.")
+            return
+
+        if os.geteuid() == 0:
+            command = [INSTALLER, "install", app_id]
+        elif command_exists("pkexec"):
+            command = ["pkexec", INSTALLER, "install", app_id]
+        elif command_exists("sudo"):
+            command = ["sudo", INSTALLER, "install", app_id]
+        else:
+            self.set_status("Administrator access is needed.")
+            return
+
+        self.set_busy(True)
+        self.set_status(f"Installing {app.get('name', app_id)}...")
+
+        def worker():
+            completed = subprocess.run(
+                command,
+                text=True,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.STDOUT,
+                check=False,
+            )
+            GLib.idle_add(self.finish_install, completed.returncode, completed.stdout, app)
+
+        threading.Thread(target=worker, daemon=True).start()
+
+    def finish_install(self, code, output, app):
+        self.set_busy(False)
+        if code == 0:
+            self.set_status((output or f"Installed {app.get('name', app.get('id', 'app'))}").strip())
+            self.refresh_apps()
+        else:
+            self.set_status((output or "Could not install app.").strip())
+        return False
+
+    def open_app(self, app):
+        command_text = app.get("exec") or f"/usr/local/bin/{app.get('id', '')}"
+        try:
+            command = [part for part in shlex.split(command_text) if not part.startswith("%")]
+        except ValueError:
+            command = [command_text]
+
+        if not command:
+            self.set_status("App command is missing.")
+            return
+
+        try:
+            subprocess.Popen(command)
+        except FileNotFoundError:
+            self.set_status(f"Could not find {command[0]}.")
+            return
+        except Exception as exc:
+            self.set_status(str(exc))
+            return
+
+        self.set_status(f"Opened {app.get('name', app.get('id', 'app'))}")
+
+
+def main():
+    app = AppStore()
+    return app.run(sys.argv)
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

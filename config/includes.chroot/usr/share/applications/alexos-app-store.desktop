@@ -1,0 +1,10 @@
+[Desktop Entry]
+Type=Application
+Name=AlexOS App Store
+GenericName=App Store
+Comment=Install AlexOS apps
+Exec=/usr/local/bin/alexos-app-store
+Icon=alexos-app-store
+Terminal=false
+Categories=Settings;PackageManager;
+Keywords=AlexOS;Apps;Store;Install;

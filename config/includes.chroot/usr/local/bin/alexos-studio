@@ -14,6 +14,7 @@ APP_ID = "os.alex.studio"
 
 
 TOOLS = [
+    ("alexos-app-store", "Apps", "alexos-app-store", [["/usr/local/bin/alexos-app-store"]]),
     ("google-chrome", "Web", "google-chrome", [["google-chrome"], ["chromium"], ["xdg-open", "https://www.google.com"]]),
     ("alexos-files", "Files", "alexos-files", [["/usr/local/bin/alexos-files"]]),
     ("alexos-write", "Write", "alexos-write", [["/usr/local/bin/alexos-write"]]),

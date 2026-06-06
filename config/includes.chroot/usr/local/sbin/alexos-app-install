@@ -1,0 +1,488 @@
+#!/usr/bin/env python3
+import configparser
+import hashlib
+import json
+import os
+import re
+import shutil
+import subprocess
+import sys
+import tempfile
+from datetime import datetime, timezone
+from pathlib import Path
+from urllib.error import HTTPError, URLError
+from urllib.parse import quote
+from urllib.request import Request, urlopen
+
+
+CONFIG_FILE = Path("/etc/alexos/app-store.conf")
+DEFAULT_REPO = "bobwdmai/alexOS-apps"
+DEFAULT_BRANCH = "main"
+CATALOG_FILES = ("apps.json", "catalog.json")
+ICON_THEME = "blueprint-WhiteSur-dark-GNOME"
+STATE_DIR = Path("/var/lib/alexos/app-store")
+STATE_FILE = STATE_DIR / "installed.json"
+USER_AGENT = "AlexOS-App-Store/1.0"
+ALLOWED_TARGETS = (
+    "/usr/local/bin/",
+    "/usr/share/applications/",
+    "/usr/share/icons/",
+    "/usr/share/pixmaps/",
+)
+
+
+class StoreError(RuntimeError):
+    pass
+
+
+def read_config():
+    config = {
+        "ALEXOS_APP_STORE_REPO": DEFAULT_REPO,
+        "ALEXOS_APP_STORE_BRANCH": DEFAULT_BRANCH,
+    }
+    if CONFIG_FILE.exists():
+        for line in CONFIG_FILE.read_text(encoding="utf-8").splitlines():
+            line = line.strip()
+            if not line or line.startswith("#") or "=" not in line:
+                continue
+            key, value = line.split("=", 1)
+            config[key.strip()] = value.strip().strip("\"'")
+
+    repo = os.environ.get("ALEXOS_APP_STORE_REPO", config["ALEXOS_APP_STORE_REPO"])
+    branch = os.environ.get("ALEXOS_APP_STORE_BRANCH", config["ALEXOS_APP_STORE_BRANCH"])
+    branches = []
+    for candidate in (branch, DEFAULT_BRANCH, "master"):
+        if candidate and candidate not in branches:
+            branches.append(candidate)
+    return repo, branches
+
+
+def request_bytes(url, timeout=20):
+    request = Request(
+        url,
+        headers={
+            "Accept": "application/vnd.github+json, application/json, */*",
+            "User-Agent": USER_AGENT,
+        },
+    )
+    try:
+        with urlopen(request, timeout=timeout) as response:
+            return response.read()
+    except HTTPError as exc:
+        raise StoreError(f"{url} returned HTTP {exc.code}") from exc
+    except URLError as exc:
+        raise StoreError(f"Could not reach {url}: {exc.reason}") from exc
+
+
+def request_json(url, timeout=20):
+    return json.loads(request_bytes(url, timeout).decode("utf-8"))
+
+
+def raw_url(repo, branch, path):
+    safe_path = "/".join(quote(part) for part in path.split("/"))
+    return f"https://raw.githubusercontent.com/{repo}/{quote(branch)}/{safe_path}"
+
+
+def api_contents_url(repo, branch, path=""):
+    suffix = quote(path.strip("/")) if path else ""
+    base = f"https://api.github.com/repos/{repo}/contents"
+    if suffix:
+        base += f"/{suffix}"
+    return f"{base}?ref={quote(branch)}"
+
+
+def display_name_from_id(app_id):
+    return " ".join(part.capitalize() for part in app_id.split("-"))
+
+
+def clean_id(value):
+    value = re.sub(r"[^A-Za-z0-9._+-]+", "-", str(value).strip()).strip("-")
+    return value.lower()
+
+
+def parse_desktop(text):
+    parser = configparser.ConfigParser(interpolation=None)
+    parser.optionxform = str
+    parser.read_string(text)
+    if "Desktop Entry" not in parser:
+        return {}
+    entry = parser["Desktop Entry"]
+    return {key: entry.get(key, "") for key in entry}
+
+
+def first_category(categories):
+    for category in str(categories or "").split(";"):
+        category = category.strip()
+        if category:
+            return category
+    return "AlexOS"
+
+
+def file_sha(value):
+    return str(value or "")
+
+
+def app_digest(app):
+    parts = []
+    for item in app.get("files", []):
+        parts.append(f"{item.get('path', '')}:{file_sha(item.get('sha'))}")
+    if app.get("apt"):
+        parts.append("apt:" + ",".join(app["apt"]))
+    if app.get("deb_url"):
+        parts.append("deb:" + app["deb_url"])
+    return hashlib.sha256("|".join(parts).encode("utf-8")).hexdigest()
+
+
+def read_state():
+    if not STATE_FILE.exists():
+        return {}
+    try:
+        return json.loads(STATE_FILE.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return {}
+
+
+def write_state(state):
+    STATE_DIR.mkdir(parents=True, exist_ok=True)
+    STATE_FILE.write_text(json.dumps(state, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+    STATE_FILE.chmod(0o644)
+
+
+def is_path_installed(path):
+    return Path(path).exists()
+
+
+def mark_install_state(app, state):
+    files = app.get("files", [])
+    file_paths = [item.get("path") for item in files if item.get("path")]
+    files_installed = bool(file_paths) and all(is_path_installed(path) for path in file_paths)
+
+    apt_installed = False
+    if app.get("apt"):
+        apt_installed = all(package_installed(pkg) for pkg in app["apt"])
+
+    deb_installed = False
+    if app.get("check_path"):
+        deb_installed = is_path_installed(app["check_path"])
+
+    installed = files_installed or apt_installed or deb_installed
+    known = state.get(app["id"], {})
+    digest = app_digest(app)
+    app["installed"] = installed
+    app["update_available"] = bool(installed and known.get("digest") != digest)
+    app["digest"] = digest
+    return app
+
+
+def package_installed(package):
+    completed = subprocess.run(
+        ["dpkg-query", "-W", "-f=${Status}", package],
+        text=True,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.DEVNULL,
+        check=False,
+    )
+    return completed.returncode == 0 and "install ok installed" in completed.stdout
+
+
+def normalize_files(entry, app_id):
+    files = []
+    for item in entry.get("files", []):
+        if not isinstance(item, dict) or not item.get("url") or not item.get("path"):
+            continue
+        files.append(
+            {
+                "url": str(item["url"]),
+                "path": str(item["path"]),
+                "mode": str(item.get("mode", "0644")),
+                "sha": str(item.get("sha", "")),
+            }
+        )
+
+    if entry.get("script_url"):
+        files.append(
+            {
+                "url": str(entry["script_url"]),
+                "path": f"/usr/local/bin/{app_id}",
+                "mode": "0755",
+                "sha": str(entry.get("script_sha", "")),
+            }
+        )
+    if entry.get("desktop_url"):
+        files.append(
+            {
+                "url": str(entry["desktop_url"]),
+                "path": f"/usr/share/applications/{app_id}.desktop",
+                "mode": "0644",
+                "sha": str(entry.get("desktop_sha", "")),
+            }
+        )
+    if entry.get("icon_url"):
+        files.append(
+            {
+                "url": str(entry["icon_url"]),
+                "path": f"/usr/share/icons/{ICON_THEME}/scalable/apps/{app_id}.svg",
+                "mode": "0644",
+                "sha": str(entry.get("icon_sha", "")),
+            }
+        )
+
+    return files
+
+
+def normalize_catalog(data, source):
+    raw_apps = data.get("apps", data) if isinstance(data, dict) else data
+    if not isinstance(raw_apps, list):
+        raise StoreError("Catalog must be a list or contain an apps list")
+
+    apps = []
+    for entry in raw_apps:
+        if not isinstance(entry, dict):
+            continue
+        app_id = clean_id(entry.get("id") or entry.get("name") or "")
+        if not app_id:
+            continue
+        apt = entry.get("apt", [])
+        if isinstance(apt, str):
+            apt = [apt]
+        app = {
+            "id": app_id,
+            "name": str(entry.get("name") or display_name_from_id(app_id)),
+            "description": str(entry.get("description") or entry.get("comment") or ""),
+            "category": str(entry.get("category") or "AlexOS"),
+            "icon": str(entry.get("icon") or app_id),
+            "exec": str(entry.get("exec") or f"/usr/local/bin/{app_id}"),
+            "source": source,
+            "files": normalize_files(entry, app_id),
+            "apt": [str(pkg) for pkg in apt],
+            "deb_url": str(entry.get("deb_url") or ""),
+            "check_path": str(entry.get("check_path") or ""),
+        }
+        apps.append(app)
+    return apps
+
+
+def scanned_apps(repo, branch):
+    contents = request_json(api_contents_url(repo, branch))
+    if not isinstance(contents, list):
+        raise StoreError("GitHub contents response was not a list")
+
+    files = {entry.get("name"): entry for entry in contents if entry.get("type") == "file"}
+    apps = []
+    for app_id in sorted(files):
+        if not app_id.startswith("alexos-") or "." in app_id:
+            continue
+
+        script = files[app_id]
+        desktop = files.get(f"{app_id}.desktop")
+        icon = files.get(f"{app_id}.svg")
+        if not desktop:
+            continue
+
+        desktop_text = request_bytes(desktop["download_url"]).decode("utf-8", errors="replace")
+        desktop_info = parse_desktop(desktop_text)
+        icon_name = desktop_info.get("Icon") or app_id
+        bundle_files = [
+            {
+                "url": script["download_url"],
+                "path": f"/usr/local/bin/{app_id}",
+                "mode": "0755",
+                "sha": file_sha(script.get("sha")),
+            },
+            {
+                "url": desktop["download_url"],
+                "path": f"/usr/share/applications/{app_id}.desktop",
+                "mode": "0644",
+                "sha": file_sha(desktop.get("sha")),
+            },
+        ]
+        if icon:
+            bundle_files.append(
+                {
+                    "url": icon["download_url"],
+                    "path": f"/usr/share/icons/{ICON_THEME}/scalable/apps/{app_id}.svg",
+                    "mode": "0644",
+                    "sha": file_sha(icon.get("sha")),
+                }
+            )
+
+        apps.append(
+            {
+                "id": app_id,
+                "name": desktop_info.get("Name") or display_name_from_id(app_id),
+                "description": desktop_info.get("Comment") or "",
+                "category": first_category(desktop_info.get("Categories")),
+                "icon": icon_name,
+                "exec": desktop_info.get("Exec") or f"/usr/local/bin/{app_id}",
+                "source": f"https://github.com/{repo}",
+                "files": bundle_files,
+                "apt": [],
+                "deb_url": "",
+                "check_path": "",
+            }
+        )
+    return apps
+
+
+def load_apps():
+    repo, branches = read_config()
+    errors = []
+    for branch in branches:
+        for catalog_name in CATALOG_FILES:
+            try:
+                data = request_json(raw_url(repo, branch, catalog_name))
+                apps = normalize_catalog(data, f"https://github.com/{repo}/blob/{branch}/{catalog_name}")
+                if apps:
+                    state = read_state()
+                    return [mark_install_state(app, state) for app in apps], repo, branch
+            except StoreError as exc:
+                errors.append(str(exc))
+            except json.JSONDecodeError as exc:
+                errors.append(f"{catalog_name} is not valid JSON: {exc}")
+
+        try:
+            apps = scanned_apps(repo, branch)
+            if apps:
+                state = read_state()
+                return [mark_install_state(app, state) for app in apps], repo, branch
+        except StoreError as exc:
+            errors.append(str(exc))
+
+    details = "\n".join(errors[-3:]) if errors else "No apps were found"
+    raise StoreError(f"Could not load AlexOS apps from {repo}.\n{details}")
+
+
+def safe_target(path):
+    target = Path(path)
+    if not target.is_absolute():
+        raise StoreError(f"Install path must be absolute: {path}")
+    target_str = str(target)
+    if not any(target_str.startswith(prefix) for prefix in ALLOWED_TARGETS):
+        raise StoreError(f"Install path is outside AlexOS app locations: {path}")
+    return target
+
+
+def parse_mode(value):
+    if isinstance(value, int):
+        return value
+    try:
+        return int(str(value), 8)
+    except ValueError as exc:
+        raise StoreError(f"Invalid file mode: {value}") from exc
+
+
+def install_file(item):
+    url = item.get("url")
+    target = safe_target(item.get("path", ""))
+    mode = parse_mode(item.get("mode", "0644"))
+    data = request_bytes(url)
+
+    target.parent.mkdir(parents=True, exist_ok=True)
+    with tempfile.NamedTemporaryFile(delete=False, dir=str(target.parent)) as handle:
+        temp_name = handle.name
+        handle.write(data)
+    os.chmod(temp_name, mode)
+    os.replace(temp_name, target)
+
+
+def run_command(command):
+    completed = subprocess.run(command, text=True, check=False)
+    if completed.returncode != 0:
+        raise StoreError(f"Command failed: {' '.join(command)}")
+
+
+def install_apt(packages):
+    if not packages:
+        return
+    if shutil.which("apt-get") is None:
+        raise StoreError("apt-get is not available")
+    run_command(["apt-get", "update"])
+    run_command(["apt-get", "install", "-y", *packages])
+
+
+def install_deb(url):
+    if not url:
+        return
+    if shutil.which("apt-get") is None:
+        raise StoreError("apt-get is not available")
+    with tempfile.NamedTemporaryFile(suffix=".deb", delete=False) as handle:
+        deb_path = handle.name
+        handle.write(request_bytes(url))
+    try:
+        run_command(["apt-get", "install", "-y", deb_path])
+    finally:
+        try:
+            os.unlink(deb_path)
+        except OSError:
+            pass
+
+
+def refresh_caches():
+    if shutil.which("update-desktop-database"):
+        subprocess.run(["update-desktop-database", "/usr/share/applications"], check=False)
+    icon_dir = Path("/usr/share/icons") / ICON_THEME
+    if shutil.which("gtk-update-icon-cache") and icon_dir.exists():
+        subprocess.run(["gtk-update-icon-cache", "-f", "-t", str(icon_dir)], check=False)
+
+
+def require_root(argv):
+    if os.geteuid() == 0:
+        return
+    if shutil.which("pkexec"):
+        os.execvp("pkexec", ["pkexec", sys.executable, *argv])
+    if shutil.which("sudo"):
+        os.execvp("sudo", ["sudo", sys.executable, *argv])
+    raise StoreError("Administrator access is needed to install apps")
+
+
+def install_app(app_id):
+    require_root(sys.argv)
+    apps, repo, branch = load_apps()
+    app = next((candidate for candidate in apps if candidate["id"] == app_id), None)
+    if not app:
+        raise StoreError(f"App not found: {app_id}")
+
+    install_apt(app.get("apt", []))
+    install_deb(app.get("deb_url", ""))
+    for item in app.get("files", []):
+        install_file(item)
+    refresh_caches()
+
+    state = read_state()
+    state[app["id"]] = {
+        "repo": repo,
+        "branch": branch,
+        "digest": app_digest(app),
+        "installed_at": datetime.now(timezone.utc).isoformat(),
+        "name": app["name"],
+    }
+    write_state(state)
+    print(f"Installed {app['name']}")
+
+
+def print_list_json():
+    apps, repo, branch = load_apps()
+    print(json.dumps({"repo": repo, "branch": branch, "apps": apps}, indent=2, sort_keys=True))
+
+
+def usage():
+    print("Usage: alexos-app-install list-json | install APP_ID", file=sys.stderr)
+
+
+def main(argv):
+    if len(argv) == 2 and argv[1] == "list-json":
+        print_list_json()
+        return 0
+    if len(argv) == 3 and argv[1] == "install":
+        install_app(argv[2])
+        return 0
+    usage()
+    return 2
+
+
+if __name__ == "__main__":
+    try:
+        raise SystemExit(main(sys.argv))
+    except StoreError as exc:
+        print(str(exc), file=sys.stderr)
+        raise SystemExit(1)
