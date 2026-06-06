@@ -448,6 +448,7 @@ install_blueprint_icon_theme() {
   local status_dir="${icon_root}/scalable/status"
   local mimetypes_dir="${icon_root}/scalable/mimetypes"
   local hicolor_apps="${CHROOT_DIR}/usr/share/icons/hicolor/scalable/apps"
+  local pixmaps_dir="${CHROOT_DIR}/usr/share/pixmaps"
 
   install -d \
     "${apps_dir}" \
@@ -456,7 +457,8 @@ install_blueprint_icon_theme() {
     "${devices_dir}" \
     "${status_dir}" \
     "${mimetypes_dir}" \
-    "${hicolor_apps}"
+    "${hicolor_apps}" \
+    "${pixmaps_dir}"
 
   cat > "${icon_root}/index.theme" <<EOF
 [Icon Theme]
@@ -566,6 +568,9 @@ EOF
   write_blueprint_icon "${mimetypes_dir}/document-new.svg" "NEW" "#e2e8f0" "M44 35h30l14 14v43H44zM74 35v15h14M54 70h24M66 58v24"
 
   cp "${apps_dir}"/alexos-*.svg "${hicolor_apps}/"
+  cp "${apps_dir}/alexos-app-store.svg" "${hicolor_apps}/software-store.svg"
+  cp "${apps_dir}/alexos-app-store.svg" "${hicolor_apps}/system-software-install.svg"
+  cp "${apps_dir}/alexos-app-store.svg" "${pixmaps_dir}/alexos-app-store.svg"
 
   if [[ -x "${CHROOT_DIR}/usr/bin/gtk-update-icon-cache" ]]; then
     chroot_run gtk-update-icon-cache -f -t "/usr/share/icons/${ALEXOS_ICON_THEME}" || true
