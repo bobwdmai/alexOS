@@ -1,0 +1,933 @@
+#!/usr/bin/env python3
+"""AlexOS Draw — blueprint-themed vector drawing app with SVG export."""
+
+import enum
+import sys
+import math
+import xml.etree.ElementTree as ET
+from copy import deepcopy
+from pathlib import Path
+
+import gi
+
+gi.require_version("Gtk", "4.0")
+gi.require_version("Adw", "1")
+from gi.repository import Adw, Gdk, GLib, Gio, Gtk
+
+APP_CSS = b"""
+window { background: #0a1929; color: #e0fbfc; }
+headerbar {
+  background: rgba(8,15,28,0.97);
+  border-bottom: 1px solid rgba(0,180,216,0.14);
+  color: #e0fbfc;
+}
+button {
+  border-radius: 6px; color: #94c8da;
+  border: 1px solid rgba(0,180,216,0.12);
+  background: rgba(0,180,216,0.05);
+  min-height: 30px; padding: 0 10px; font-weight: 600;
+}
+button:hover { background: rgba(0,180,216,0.13); color: #e0fbfc; }
+button.flat { background: transparent; border-color: transparent; }
+button.flat:hover { background: rgba(0,180,216,0.10); }
+button.suggested-action {
+  background: linear-gradient(135deg,#005e80,#00b4d8);
+  color:#fff; border-color:rgba(0,180,216,0.3);
+}
+button.tool { min-width:38px; min-height:38px; padding:4px; border-radius:8px; }
+button.tool.active {
+  background: rgba(0,180,216,0.20); border-color:rgba(0,180,216,0.40); color:#00b4d8;
+}
+separator { background: rgba(0,180,216,0.10); min-width:1px; min-height:1px; }
+scrollbar slider {
+  background: rgba(0,180,216,0.18); border-radius:4px;
+  min-width:5px; min-height:5px; margin:2px;
+}
+scrollbar slider:hover { background: rgba(0,180,216,0.32); }
+.toolbar {
+  background: rgba(6,15,28,0.90);
+  border-right: 1px solid rgba(0,180,216,0.10);
+  padding: 8px 6px;
+}
+.props-panel {
+  background: rgba(6,15,28,0.90);
+  border-left: 1px solid rgba(0,180,216,0.10);
+  padding: 10px;
+  min-width: 160px;
+}
+.prop-label { color:#4a7a8f; font-size:12px; font-weight:700; letter-spacing:1px; }
+.statusbar {
+  background: rgba(6,15,28,0.92);
+  border-top: 1px solid rgba(0,180,216,0.10);
+  color: #4a7a8f; font-size: 12px; padding: 3px 12px;
+}
+.swatch {
+  border-radius: 6px; min-width:28px; min-height:28px;
+  border: 2px solid rgba(0,180,216,0.30);
+}
+entry {
+  background: rgba(0,180,216,0.05); border: 1px solid rgba(0,180,216,0.18);
+  color: #e0fbfc; border-radius:6px; caret-color:#00b4d8; min-height:28px;
+}
+"""
+
+
+def apply_css():
+    p = Gtk.CssProvider()
+    p.load_from_data(APP_CSS)
+    d = Gdk.Display.get_default()
+    if d:
+        Gtk.StyleContext.add_provider_for_display(d, p, Gtk.STYLE_PROVIDER_PRIORITY_APPLICATION)
+
+
+def hex_to_rgb(h: str) -> tuple[float, float, float]:
+    h = h.lstrip("#")
+    if len(h) == 6:
+        return int(h[:2], 16) / 255, int(h[2:4], 16) / 255, int(h[4:], 16) / 255
+    return 0, 0.706, 0.847
+
+
+# ── Shape model ───────────────────────────────────────────────────────────────
+
+class Tool(enum.Enum):
+    SELECT = "select"
+    RECT = "rect"
+    ELLIPSE = "ellipse"
+    LINE = "line"
+    PEN = "pen"
+    TEXT = "text"
+
+
+class Shape:
+    def __init__(self):
+        self.selected = False
+        self.fill = "#1a3a4a"
+        self.stroke = "#00b4d8"
+        self.stroke_width = 2.0
+
+    def draw(self, cr):
+        raise NotImplementedError
+
+    def hit(self, x, y) -> bool:
+        raise NotImplementedError
+
+    def bbox(self) -> tuple:
+        raise NotImplementedError
+
+    def to_svg(self) -> str:
+        raise NotImplementedError
+
+    def _set_fill(self, cr):
+        r, g, b = hex_to_rgb(self.fill)
+        cr.set_source_rgba(r, g, b, 0.7)
+        cr.fill_preserve()
+
+    def _set_stroke(self, cr):
+        r, g, b = hex_to_rgb(self.stroke)
+        cr.set_source_rgba(r, g, b, 1)
+        cr.set_line_width(self.stroke_width)
+        cr.stroke()
+
+    def _draw_selection(self, cr, x, y, w, h):
+        cr.set_source_rgba(0, 0.706, 0.847, 0.5)
+        cr.set_line_width(1)
+        cr.set_dash([4, 4])
+        cr.rectangle(x - 4, y - 4, w + 8, h + 8)
+        cr.stroke()
+        cr.set_dash([])
+        cr.set_source_rgba(0, 0.706, 0.847, 0.9)
+        for hx, hy in [(x-4, y-4), (x+w/2-4, y-4), (x+w+4, y-4),
+                        (x-4, y+h/2-4), (x+w+4, y+h/2-4),
+                        (x-4, y+h+4), (x+w/2-4, y+h+4), (x+w+4, y+h+4)]:
+            cr.rectangle(hx, hy, 8, 8)
+            cr.fill()
+
+
+class RectShape(Shape):
+    def __init__(self, x, y, w, h):
+        super().__init__()
+        self.x, self.y = x, y
+        self.w, self.h = max(w, 1), max(h, 1)
+
+    def draw(self, cr):
+        cr.rectangle(self.x, self.y, self.w, self.h)
+        self._set_fill(cr)
+        self._set_stroke(cr)
+        if self.selected:
+            self._draw_selection(cr, self.x, self.y, self.w, self.h)
+
+    def hit(self, x, y):
+        return self.x <= x <= self.x + self.w and self.y <= y <= self.y + self.h
+
+    def bbox(self):
+        return self.x, self.y, self.w, self.h
+
+    def to_svg(self):
+        return (f'<rect x="{self.x:.1f}" y="{self.y:.1f}" '
+                f'width="{self.w:.1f}" height="{self.h:.1f}" '
+                f'fill="{self.fill}" stroke="{self.stroke}" '
+                f'stroke-width="{self.stroke_width}"/>')
+
+
+class EllipseShape(Shape):
+    def __init__(self, cx, cy, rx, ry):
+        super().__init__()
+        self.cx, self.cy = cx, cy
+        self.rx, self.ry = max(rx, 1), max(ry, 1)
+
+    def draw(self, cr):
+        cr.save()
+        cr.translate(self.cx, self.cy)
+        cr.scale(self.rx, self.ry)
+        cr.arc(0, 0, 1, 0, 2 * math.pi)
+        cr.restore()
+        self._set_fill(cr)
+        cr.save()
+        cr.translate(self.cx, self.cy)
+        cr.scale(self.rx, self.ry)
+        cr.arc(0, 0, 1, 0, 2 * math.pi)
+        cr.restore()
+        self._set_stroke(cr)
+        if self.selected:
+            self._draw_selection(cr, self.cx - self.rx, self.cy - self.ry,
+                                  self.rx * 2, self.ry * 2)
+
+    def hit(self, x, y):
+        return ((x - self.cx) / self.rx) ** 2 + ((y - self.cy) / self.ry) ** 2 <= 1
+
+    def bbox(self):
+        return self.cx - self.rx, self.cy - self.ry, self.rx * 2, self.ry * 2
+
+    def to_svg(self):
+        return (f'<ellipse cx="{self.cx:.1f}" cy="{self.cy:.1f}" '
+                f'rx="{self.rx:.1f}" ry="{self.ry:.1f}" '
+                f'fill="{self.fill}" stroke="{self.stroke}" '
+                f'stroke-width="{self.stroke_width}"/>')
+
+
+class LineShape(Shape):
+    def __init__(self, x1, y1, x2, y2):
+        super().__init__()
+        self.x1, self.y1, self.x2, self.y2 = x1, y1, x2, y2
+
+    def draw(self, cr):
+        cr.move_to(self.x1, self.y1)
+        cr.line_to(self.x2, self.y2)
+        self._set_stroke(cr)
+        if self.selected:
+            bx, by, bw, bh = self.bbox()
+            self._draw_selection(cr, bx, by, bw, bh)
+
+    def hit(self, x, y):
+        dx, dy = self.x2 - self.x1, self.y2 - self.y1
+        length = math.hypot(dx, dy)
+        if length == 0:
+            return math.hypot(x - self.x1, y - self.y1) < 6
+        t = max(0, min(1, ((x - self.x1) * dx + (y - self.y1) * dy) / (length * length)))
+        px, py = self.x1 + t * dx, self.y1 + t * dy
+        return math.hypot(x - px, y - py) < 6
+
+    def bbox(self):
+        return (min(self.x1, self.x2), min(self.y1, self.y2),
+                abs(self.x2 - self.x1), abs(self.y2 - self.y1))
+
+    def to_svg(self):
+        return (f'<line x1="{self.x1:.1f}" y1="{self.y1:.1f}" '
+                f'x2="{self.x2:.1f}" y2="{self.y2:.1f}" '
+                f'stroke="{self.stroke}" stroke-width="{self.stroke_width}" '
+                f'stroke-linecap="round"/>')
+
+
+class PenShape(Shape):
+    def __init__(self, points):
+        super().__init__()
+        self.points = points
+        self.fill = "none"
+
+    def draw(self, cr):
+        if len(self.points) < 2:
+            return
+        cr.move_to(*self.points[0])
+        for p in self.points[1:]:
+            cr.line_to(*p)
+        self._set_stroke(cr)
+        if self.selected:
+            bx, by, bw, bh = self.bbox()
+            self._draw_selection(cr, bx, by, bw, bh)
+
+    def hit(self, x, y):
+        for i in range(len(self.points) - 1):
+            x1, y1 = self.points[i]
+            x2, y2 = self.points[i + 1]
+            dx, dy = x2 - x1, y2 - y1
+            length = math.hypot(dx, dy)
+            if length == 0:
+                continue
+            t = max(0, min(1, ((x - x1) * dx + (y - y1) * dy) / (length * length)))
+            px, py = x1 + t * dx, y1 + t * dy
+            if math.hypot(x - px, y - py) < 6:
+                return True
+        return False
+
+    def bbox(self):
+        xs = [p[0] for p in self.points]
+        ys = [p[1] for p in self.points]
+        return min(xs), min(ys), max(xs) - min(xs), max(ys) - min(ys)
+
+    def to_svg(self):
+        d = "M " + " L ".join(f"{x:.1f},{y:.1f}" for x, y in self.points)
+        return (f'<path d="{d}" fill="none" stroke="{self.stroke}" '
+                f'stroke-width="{self.stroke_width}" stroke-linecap="round" stroke-linejoin="round"/>')
+
+
+class TextShape(Shape):
+    def __init__(self, x, y, text):
+        super().__init__()
+        self.x, self.y = x, y
+        self.text = text
+        self.font_size = 18
+        self.fill = "#e0fbfc"
+        self.stroke = "none"
+
+    def draw(self, cr):
+        r, g, b = hex_to_rgb(self.fill)
+        cr.set_source_rgba(r, g, b, 1)
+        cr.select_font_face("Cantarell", 0, 0)
+        cr.set_font_size(self.font_size)
+        cr.move_to(self.x, self.y)
+        cr.show_text(self.text)
+        if self.selected:
+            te = cr.text_extents(self.text)
+            self._draw_selection(cr, self.x, self.y - self.font_size, te[2], self.font_size * 1.2)
+
+    def hit(self, x, y):
+        return (self.x <= x <= self.x + self.font_size * len(self.text) * 0.6 and
+                self.y - self.font_size <= y <= self.y + 4)
+
+    def bbox(self):
+        w = self.font_size * len(self.text) * 0.6
+        return self.x, self.y - self.font_size, w, self.font_size * 1.2
+
+    def to_svg(self):
+        return (f'<text x="{self.x:.1f}" y="{self.y:.1f}" '
+                f'font-family="Cantarell,sans-serif" font-size="{self.font_size}" '
+                f'fill="{self.fill}">{self.text}</text>')
+
+
+# ── Canvas widget ─────────────────────────────────────────────────────────────
+
+class Canvas(Gtk.DrawingArea):
+    def __init__(self, app):
+        super().__init__()
+        self.app = app
+        self.shapes: list[Shape] = []
+        self.undo_stack: list[list] = []
+        self.redo_stack: list[list] = []
+
+        self.tool = Tool.SELECT
+        self.fill_color = "#1a3a4a"
+        self.stroke_color = "#00b4d8"
+        self.stroke_width = 2.0
+
+        self._drag_start: tuple | None = None
+        self._preview: Shape | None = None
+        self._pen_points: list = []
+        self._moving = False
+        self._move_origin: tuple | None = None
+        self._selected_origin: dict = {}
+
+        self.zoom = 1.0
+        self.pan_x = 0.0
+        self.pan_y = 0.0
+
+        self.set_vexpand(True)
+        self.set_hexpand(True)
+        self.set_focusable(True)
+        self.set_draw_func(self._draw)
+
+        # Mouse events
+        press = Gtk.GestureClick()
+        press.set_button(0)
+        press.connect("pressed", self._pressed)
+        press.connect("released", self._released)
+        self.add_controller(press)
+
+        motion = Gtk.EventControllerMotion()
+        motion.connect("motion", self._motion)
+        self.add_controller(motion)
+
+        scroll = Gtk.EventControllerScroll(
+            flags=Gtk.EventControllerScrollFlags.BOTH_AXES)
+        scroll.connect("scroll", self._scroll)
+        self.add_controller(scroll)
+
+        key = Gtk.EventControllerKey()
+        key.connect("key-pressed", self._key_pressed)
+        self.add_controller(key)
+
+    # ── Coordinate transforms ─────────────────────────────────────────────
+
+    def _to_canvas(self, wx, wy):
+        return (wx - self.pan_x) / self.zoom, (wy - self.pan_y) / self.zoom
+
+    def _to_widget(self, cx, cy):
+        return cx * self.zoom + self.pan_x, cy * self.zoom + self.pan_y
+
+    # ── Undo / Redo ───────────────────────────────────────────────────────
+
+    def _save_undo(self):
+        self.undo_stack.append(deepcopy(self.shapes))
+        if len(self.undo_stack) > 60:
+            self.undo_stack.pop(0)
+        self.redo_stack.clear()
+
+    def undo(self):
+        if self.undo_stack:
+            self.redo_stack.append(deepcopy(self.shapes))
+            self.shapes = self.undo_stack.pop()
+            self.queue_draw()
+
+    def redo(self):
+        if self.redo_stack:
+            self.undo_stack.append(deepcopy(self.shapes))
+            self.shapes = self.redo_stack.pop()
+            self.queue_draw()
+
+    # ── Draw ──────────────────────────────────────────────────────────────
+
+    def _draw(self, _area, cr, width, height):
+        # Background
+        cr.set_source_rgb(0.051, 0.106, 0.165)
+        cr.paint()
+
+        # Blueprint grid
+        cr.set_source_rgba(0, 0.706, 0.847, 0.06)
+        cr.set_line_width(1)
+        step = 24 * self.zoom
+        ox = self.pan_x % step
+        oy = self.pan_y % step
+        x = ox
+        while x < width:
+            cr.move_to(x, 0)
+            cr.line_to(x, height)
+            x += step
+        y = oy
+        while y < height:
+            cr.move_to(0, y)
+            cr.line_to(width, y)
+            y += step
+        cr.stroke()
+
+        # Apply zoom/pan
+        cr.save()
+        cr.translate(self.pan_x, self.pan_y)
+        cr.scale(self.zoom, self.zoom)
+
+        for shape in self.shapes:
+            shape.draw(cr)
+
+        if self._preview:
+            cr.set_source_rgba(0, 0.706, 0.847, 0.35)
+            self._preview.draw(cr)
+
+        cr.restore()
+
+    # ── Input handling ────────────────────────────────────────────────────
+
+    def _pressed(self, gesture, n_press, wx, wy):
+        self.grab_focus()
+        cx, cy = self._to_canvas(wx, wy)
+        button = gesture.get_current_button()
+
+        if button == 2:  # Middle-click pan
+            self._drag_start = (wx, wy, self.pan_x, self.pan_y)
+            self._panning = True
+            return
+        self._panning = False
+
+        if self.tool == Tool.SELECT:
+            hit = None
+            for shape in reversed(self.shapes):
+                if shape.hit(cx, cy):
+                    hit = shape
+                    break
+            if hit:
+                if not hit.selected:
+                    for s in self.shapes:
+                        s.selected = False
+                    hit.selected = True
+                self._moving = True
+                self._move_origin = (cx, cy)
+                self._selected_origin = {id(s): (s.x if hasattr(s, 'x') else None,
+                                                   s.y if hasattr(s, 'y') else None)
+                                          for s in self.shapes if s.selected}
+            else:
+                for s in self.shapes:
+                    s.selected = False
+                self._drag_start = (cx, cy)
+            self.app.on_selection_changed()
+            self.queue_draw()
+
+        elif self.tool == Tool.PEN:
+            self._pen_points = [(cx, cy)]
+            self._drag_start = (cx, cy)
+
+        elif self.tool == Tool.TEXT:
+            dlg = Gtk.Dialog(title="Add Text", transient_for=self.get_root(), modal=True)
+            dlg.add_button("Cancel", Gtk.ResponseType.CANCEL)
+            dlg.add_button("Add", Gtk.ResponseType.OK)
+            entry = Gtk.Entry()
+            entry.set_placeholder_text("Type here…")
+            entry.set_margin_top(12)
+            entry.set_margin_bottom(12)
+            entry.set_margin_start(12)
+            entry.set_margin_end(12)
+            dlg.get_content_area().append(entry)
+            dlg.connect("response", lambda d, r: self._add_text(d, r, cx, cy, entry))
+            dlg.present()
+
+        else:
+            self._drag_start = (cx, cy)
+
+    def _add_text(self, dlg, response, cx, cy, entry):
+        if response == Gtk.ResponseType.OK:
+            text = entry.get_text().strip()
+            if text:
+                self._save_undo()
+                t = TextShape(cx, cy, text)
+                t.fill = self.stroke_color
+                self.shapes.append(t)
+                self.queue_draw()
+        dlg.destroy()
+
+    def _motion(self, _ctrl, wx, wy):
+        cx, cy = self._to_canvas(wx, wy)
+        self.app.update_status(f"  {cx:.0f}, {cy:.0f}  ·  zoom {self.zoom:.0%}")
+
+        if hasattr(self, '_panning') and self._panning and self._drag_start:
+            ox, oy, opx, opy = self._drag_start
+            self.pan_x = opx + (wx - ox)
+            self.pan_y = opy + (wy - oy)
+            self.queue_draw()
+            return
+
+        if self.tool == Tool.SELECT:
+            if self._moving and self._move_origin:
+                dx, dy = cx - self._move_origin[0], cy - self._move_origin[1]
+                for shape in self.shapes:
+                    if not shape.selected:
+                        continue
+                    if hasattr(shape, 'x'):
+                        shape.x += dx
+                        shape.y += dy
+                    if hasattr(shape, 'cx'):
+                        shape.cx += dx
+                        shape.cy += dy
+                    if hasattr(shape, 'x1'):
+                        shape.x1 += dx; shape.y1 += dy
+                        shape.x2 += dx; shape.y2 += dy
+                    if hasattr(shape, 'points'):
+                        shape.points = [(px + dx, py + dy) for px, py in shape.points]
+                self._move_origin = (cx, cy)
+                self.queue_draw()
+            return
+
+        if self.tool == Tool.PEN and self._pen_points:
+            self._pen_points.append((cx, cy))
+            self._preview = PenShape(self._pen_points)
+            self._preview.stroke = self.stroke_color
+            self._preview.stroke_width = self.stroke_width
+            self.queue_draw()
+            return
+
+        if not self._drag_start:
+            return
+        sx, sy = self._drag_start
+
+        if self.tool == Tool.RECT:
+            x, y = min(sx, cx), min(sy, cy)
+            w, h = abs(cx - sx), abs(cy - sy)
+            self._preview = RectShape(x, y, w, h)
+        elif self.tool == Tool.ELLIPSE:
+            rx, ry = abs(cx - sx) / 2, abs(cy - sy) / 2
+            self._preview = EllipseShape(sx + (cx - sx) / 2, sy + (cy - sy) / 2, rx, ry)
+        elif self.tool == Tool.LINE:
+            self._preview = LineShape(sx, sy, cx, cy)
+
+        if self._preview:
+            self._preview.fill = self.fill_color
+            self._preview.stroke = self.stroke_color
+            self._preview.stroke_width = self.stroke_width
+        self.queue_draw()
+
+    def _released(self, gesture, n_press, wx, wy):
+        cx, cy = self._to_canvas(wx, wy)
+        if hasattr(self, '_panning') and self._panning:
+            self._panning = False
+            return
+
+        if self.tool == Tool.SELECT:
+            self._moving = False
+            return
+
+        if self.tool == Tool.PEN and self._pen_points:
+            self._save_undo()
+            s = PenShape(list(self._pen_points))
+            s.stroke = self.stroke_color
+            s.stroke_width = self.stroke_width
+            self.shapes.append(s)
+            self._pen_points.clear()
+            self._preview = None
+            self.queue_draw()
+            return
+
+        if self._preview and self.tool != Tool.TEXT:
+            self._save_undo()
+            self.shapes.append(self._preview)
+
+        self._preview = None
+        self._drag_start = None
+        self.queue_draw()
+
+    def _scroll(self, _ctrl, dx, dy):
+        self.zoom = max(0.1, min(8.0, self.zoom * (0.9 if dy > 0 else 1.1)))
+        self.queue_draw()
+
+    def _key_pressed(self, _ctrl, keyval, _code, state):
+        ctrl = state & Gdk.ModifierType.CONTROL_MASK
+        if keyval in (Gdk.KEY_Delete, Gdk.KEY_BackSpace):
+            self._save_undo()
+            self.shapes = [s for s in self.shapes if not s.selected]
+            self.queue_draw()
+            return True
+        if ctrl and keyval == Gdk.KEY_z:
+            self.undo(); return True
+        if ctrl and keyval in (Gdk.KEY_y, Gdk.KEY_Z):
+            self.redo(); return True
+        if ctrl and keyval == Gdk.KEY_a:
+            for s in self.shapes:
+                s.selected = True
+            self.queue_draw(); return True
+        return False
+
+    # ── I/O ───────────────────────────────────────────────────────────────
+
+    def export_svg(self, path: Path):
+        if not self.shapes:
+            w, h, x0, y0 = 800, 600, 0, 0
+        else:
+            xs = [s.bbox()[0] for s in self.shapes]
+            ys = [s.bbox()[1] for s in self.shapes]
+            ws = [s.bbox()[0] + s.bbox()[2] for s in self.shapes]
+            hs = [s.bbox()[1] + s.bbox()[3] for s in self.shapes]
+            x0, y0 = min(xs) - 10, min(ys) - 10
+            w = max(ws) - x0 + 10
+            h = max(hs) - y0 + 10
+
+        inner = "\n  ".join(s.to_svg() for s in self.shapes)
+        svg = (f'<svg xmlns="http://www.w3.org/2000/svg" '
+               f'width="{w:.0f}" height="{h:.0f}" '
+               f'viewBox="{x0:.0f} {y0:.0f} {w:.0f} {h:.0f}">\n'
+               f'  <rect x="{x0:.0f}" y="{y0:.0f}" width="{w:.0f}" height="{h:.0f}" fill="#0d1b2a"/>\n'
+               f'  {inner}\n</svg>')
+        path.write_text(svg, "utf-8")
+
+    def load_svg(self, path: Path):
+        self._save_undo()
+        # Basic SVG import — rects, ellipses, lines, paths
+        try:
+            tree = ET.parse(path)
+            root = tree.getroot()
+            ns = {"svg": "http://www.w3.org/2000/svg"}
+            self.shapes.clear()
+            for el in root.iter():
+                tag = el.tag.split("}")[-1] if "}" in el.tag else el.tag
+                fill = el.get("fill", "#1a3a4a")
+                stroke = el.get("stroke", "#00b4d8")
+                sw = float(el.get("stroke-width", "2"))
+                if tag == "rect":
+                    s = RectShape(float(el.get("x", 0)), float(el.get("y", 0)),
+                                  float(el.get("width", 10)), float(el.get("height", 10)))
+                    s.fill, s.stroke, s.stroke_width = fill, stroke, sw
+                    self.shapes.append(s)
+                elif tag == "ellipse":
+                    s = EllipseShape(float(el.get("cx", 0)), float(el.get("cy", 0)),
+                                     float(el.get("rx", 5)), float(el.get("ry", 5)))
+                    s.fill, s.stroke, s.stroke_width = fill, stroke, sw
+                    self.shapes.append(s)
+                elif tag == "line":
+                    s = LineShape(float(el.get("x1", 0)), float(el.get("y1", 0)),
+                                  float(el.get("x2", 0)), float(el.get("y2", 0)))
+                    s.stroke, s.stroke_width = stroke, sw
+                    self.shapes.append(s)
+                elif tag == "text" and el.text:
+                    s = TextShape(float(el.get("x", 0)), float(el.get("y", 20)), el.text)
+                    s.fill = fill
+                    s.font_size = float(el.get("font-size", 18))
+                    self.shapes.append(s)
+            self.queue_draw()
+        except Exception:
+            pass
+
+
+# ── App ───────────────────────────────────────────────────────────────────────
+
+class DrawApp(Adw.Application):
+    def __init__(self):
+        super().__init__(application_id="os.alex.draw",
+                         flags=Gio.ApplicationFlags.HANDLES_OPEN)
+        self.window = None
+        self.canvas: Canvas | None = None
+        self._status_label = None
+        self._fill_btn = None
+        self._stroke_btn = None
+        self._tool_buttons: dict[Tool, Gtk.Button] = {}
+        self.connect("open", self._on_open_files)
+
+    def do_activate(self):
+        apply_css()
+        self._build()
+        self.window.present()
+
+    def _on_open_files(self, _app, files, *__):
+        apply_css()
+        self._build()
+        for f in files:
+            self.canvas.load_svg(Path(f.get_path()))
+        self.window.present()
+
+    def _build(self):
+        if self.window:
+            return
+
+        self.window = Adw.ApplicationWindow(application=self)
+        self.window.set_title("AlexOS Draw")
+        self.window.set_default_size(1100, 720)
+
+        header = Adw.HeaderBar()
+        for label, cb in [("New", self._on_new), ("Open SVG", self._on_open)]:
+            b = Gtk.Button(label=label)
+            b.add_css_class("flat")
+            b.connect("clicked", cb)
+            header.pack_start(b)
+
+        save_btn = Gtk.Button(label="Save SVG")
+        save_btn.add_css_class("suggested-action")
+        save_btn.connect("clicked", self._on_save)
+        header.pack_end(save_btn)
+
+        undo_btn = Gtk.Button(label="↩ Undo")
+        undo_btn.add_css_class("flat")
+        undo_btn.connect("clicked", lambda *_: self.canvas.undo())
+        header.pack_end(undo_btn)
+
+        redo_btn = Gtk.Button(label="↪ Redo")
+        redo_btn.add_css_class("flat")
+        redo_btn.connect("clicked", lambda *_: self.canvas.redo())
+        header.pack_end(redo_btn)
+
+        # Canvas
+        self.canvas = Canvas(self)
+        canvas_scroll = Gtk.ScrolledWindow()
+        canvas_scroll.set_child(self.canvas)
+        canvas_scroll.set_vexpand(True)
+        canvas_scroll.set_hexpand(True)
+
+        # Left toolbar (tools)
+        toolbar = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=6)
+        toolbar.add_css_class("toolbar")
+        toolbar.set_margin_top(8)
+        toolbar.set_margin_bottom(8)
+
+        TOOLS = [
+            (Tool.SELECT,  "↖", "Select"),
+            (Tool.RECT,    "▭", "Rectangle"),
+            (Tool.ELLIPSE, "○", "Ellipse"),
+            (Tool.LINE,    "╱", "Line"),
+            (Tool.PEN,     "✏", "Pen"),
+            (Tool.TEXT,    "T", "Text"),
+        ]
+        for tool, icon, tip in TOOLS:
+            btn = Gtk.Button(label=icon)
+            btn.add_css_class("tool")
+            btn.set_tooltip_text(tip)
+            btn.connect("clicked", lambda _b, t=tool: self._set_tool(t))
+            toolbar.append(btn)
+            self._tool_buttons[tool] = btn
+
+        toolbar.append(Gtk.Separator())
+
+        # Zoom
+        zoom_in = Gtk.Button(label="+")
+        zoom_in.add_css_class("tool")
+        zoom_in.connect("clicked", lambda *_: self._zoom(1.2))
+        toolbar.append(zoom_in)
+
+        zoom_out = Gtk.Button(label="−")
+        zoom_out.add_css_class("tool")
+        zoom_out.connect("clicked", lambda *_: self._zoom(1 / 1.2))
+        toolbar.append(zoom_out)
+
+        self._set_tool(Tool.SELECT)
+
+        # Right panel (properties)
+        props = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=10)
+        props.add_css_class("props-panel")
+
+        fill_lbl = Gtk.Label(label="FILL")
+        fill_lbl.add_css_class("prop-label")
+        fill_lbl.set_xalign(0)
+        props.append(fill_lbl)
+
+        self._fill_btn = Gtk.DrawingArea()
+        self._fill_btn.set_size_request(36, 36)
+        self._fill_btn.add_css_class("swatch")
+        self._fill_btn.set_draw_func(lambda a, cr, w, h: self._draw_swatch(cr, w, h, True))
+        fill_click = Gtk.GestureClick()
+        fill_click.connect("pressed", lambda *_: self._pick_color(True))
+        self._fill_btn.add_controller(fill_click)
+        props.append(self._fill_btn)
+
+        stroke_lbl = Gtk.Label(label="STROKE")
+        stroke_lbl.add_css_class("prop-label")
+        stroke_lbl.set_xalign(0)
+        props.append(stroke_lbl)
+
+        self._stroke_btn = Gtk.DrawingArea()
+        self._stroke_btn.set_size_request(36, 36)
+        self._stroke_btn.add_css_class("swatch")
+        self._stroke_btn.set_draw_func(lambda a, cr, w, h: self._draw_swatch(cr, w, h, False))
+        stroke_click = Gtk.GestureClick()
+        stroke_click.connect("pressed", lambda *_: self._pick_color(False))
+        self._stroke_btn.add_controller(stroke_click)
+        props.append(self._stroke_btn)
+
+        sw_lbl = Gtk.Label(label="WIDTH")
+        sw_lbl.add_css_class("prop-label")
+        sw_lbl.set_xalign(0)
+        props.append(sw_lbl)
+
+        sw_spin = Gtk.SpinButton()
+        sw_spin.set_adjustment(Gtk.Adjustment(value=2, lower=0.5, upper=40, step_increment=0.5))
+        sw_spin.set_digits(1)
+        sw_spin.connect("value-changed", lambda s: setattr(self.canvas, "stroke_width", s.get_value()))
+        props.append(sw_spin)
+
+        props.append(Gtk.Separator())
+
+        del_btn = Gtk.Button(label="Delete Selected")
+        del_btn.connect("clicked", lambda *_: self._delete_selected())
+        props.append(del_btn)
+
+        # Status bar
+        self._status_label = Gtk.Label(label="  Ready  ·  middle-click drag to pan  ·  scroll to zoom")
+        self._status_label.add_css_class("statusbar")
+        self._status_label.set_xalign(0)
+
+        # Layout
+        body = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL)
+        body.append(toolbar)
+        body.append(canvas_scroll)
+        body.append(props)
+
+        root = Gtk.Box(orientation=Gtk.Orientation.VERTICAL)
+        root.append(header)
+        root.append(body)
+        root.append(self._status_label)
+        self.window.set_content(root)
+
+    def _zoom(self, factor):
+        self.canvas.zoom = max(0.1, min(8.0, self.canvas.zoom * factor))
+        self.canvas.queue_draw()
+
+    def _set_tool(self, tool: Tool):
+        self.canvas.tool = tool
+        for t, btn in self._tool_buttons.items():
+            btn.remove_css_class("active")
+            if t == tool:
+                btn.add_css_class("active")
+
+    def _delete_selected(self):
+        self.canvas._save_undo()
+        self.canvas.shapes = [s for s in self.canvas.shapes if not s.selected]
+        self.canvas.queue_draw()
+
+    def _draw_swatch(self, cr, w, h, is_fill):
+        color = self.canvas.fill_color if is_fill else self.canvas.stroke_color
+        r, g, b = hex_to_rgb(color)
+        cr.set_source_rgb(r, g, b)
+        cr.arc(w / 2, h / 2, min(w, h) / 2 - 2, 0, 2 * math.pi)
+        cr.fill()
+
+    def _pick_color(self, is_fill):
+        dlg = Gtk.ColorChooserDialog(title="Pick Color", transient_for=self.window, modal=True)
+        dlg.set_use_alpha(False)
+        current = self.canvas.fill_color if is_fill else self.canvas.stroke_color
+        try:
+            rgba = Gdk.RGBA()
+            rgba.parse(current)
+            dlg.set_rgba(rgba)
+        except Exception:
+            pass
+        dlg.connect("response", lambda d, r: self._color_chosen(d, r, is_fill))
+        dlg.present()
+
+    def _color_chosen(self, dlg, response, is_fill):
+        if response == Gtk.ResponseType.OK:
+            rgba = dlg.get_rgba()
+            color = "#{:02x}{:02x}{:02x}".format(
+                int(rgba.red * 255), int(rgba.green * 255), int(rgba.blue * 255))
+            if is_fill:
+                self.canvas.fill_color = color
+                if self._fill_btn:
+                    self._fill_btn.queue_draw()
+            else:
+                self.canvas.stroke_color = color
+                if self._stroke_btn:
+                    self._stroke_btn.queue_draw()
+        dlg.destroy()
+
+    def on_selection_changed(self):
+        pass
+
+    def update_status(self, msg):
+        if self._status_label:
+            self._status_label.set_text(msg)
+
+    # ── File I/O ──────────────────────────────────────────────────────────
+
+    def _on_new(self, *_):
+        self.canvas._save_undo()
+        self.canvas.shapes.clear()
+        self.canvas.queue_draw()
+
+    def _on_open(self, *_):
+        dlg = Gtk.FileChooserDialog(title="Open SVG", transient_for=self.window,
+                                    action=Gtk.FileChooserAction.OPEN)
+        dlg.add_button("Cancel", Gtk.ResponseType.CANCEL)
+        dlg.add_button("Open", Gtk.ResponseType.ACCEPT)
+        ff = Gtk.FileFilter()
+        ff.set_name("SVG files")
+        ff.add_pattern("*.svg")
+        dlg.add_filter(ff)
+        dlg.set_modal(True)
+        dlg.connect("response", lambda d, r: (self.canvas.load_svg(Path(d.get_file().get_path()))
+                                               if r == Gtk.ResponseType.ACCEPT and d.get_file()
+                                               else None) or d.destroy())
+        dlg.present()
+
+    def _on_save(self, *_):
+        dlg = Gtk.FileChooserDialog(title="Save SVG", transient_for=self.window,
+                                    action=Gtk.FileChooserAction.SAVE)
+        dlg.add_button("Cancel", Gtk.ResponseType.CANCEL)
+        dlg.add_button("Save", Gtk.ResponseType.ACCEPT)
+        dlg.set_current_name("drawing.svg")
+        dlg.set_modal(True)
+        dlg.connect("response", lambda d, r: (self.canvas.export_svg(Path(d.get_file().get_path()))
+                                               if r == Gtk.ResponseType.ACCEPT and d.get_file()
+                                               else None) or d.destroy())
+        dlg.present()
+
+
+if __name__ == "__main__":
+    raise SystemExit(DrawApp().run(sys.argv))

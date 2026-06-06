@@ -33,7 +33,6 @@ gnome-tweaks
 gnome-software
 gnome-software-plugin-snap
 gnome-terminal
-gnome-text-editor
 gnome-keyring
 gnome-shell-extension-dashtodock
 gnome-shell-extensions
@@ -68,14 +67,8 @@ gir1.2-adw-1
 # Architect Tools
 librecad
 freecad
-inkscape
 gimp
 blender
-libreoffice-draw
-libreoffice-calc
-libreoffice-writer
-libreoffice-impress
-scribus
 
 # Installed by alexos-snap-store.service on first boot:
 # snap-store

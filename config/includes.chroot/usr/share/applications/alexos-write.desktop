@@ -1,0 +1,12 @@
+[Desktop Entry]
+Version=1.0
+Type=Application
+Name=AlexOS Write
+Comment=Text and document editor
+Icon=alexos-write
+Exec=/usr/local/bin/alexos-write %F
+Terminal=false
+Categories=TextEditor;Utility;
+MimeType=text/plain;text/markdown;text/x-python;text/x-script;text/css;application/json;text/html;text/xml;
+Keywords=text;editor;write;code;
+StartupNotify=true

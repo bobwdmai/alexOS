@@ -527,6 +527,10 @@ EOF
   write_blueprint_icon "${apps_dir}/org.gnome.Software.svg" "APP" "#facc15" "M42 50h44v37H42zM52 50a12 12 0 0 1 24 0M52 65h24"
   write_blueprint_icon "${apps_dir}/alexos-software-updates.svg" "UPD" "#22d3ee" "M40 66a24 24 0 0 1 41-17M81 49h-16M81 49v-16M88 66a24 24 0 0 1-41 17M47 83h16M47 83v16M57 66h14"
   write_blueprint_icon "${apps_dir}/alexos-icon-changer.svg" "ICO" "#c084fc" "M64 35a29 29 0 1 0 0 58a14 14 0 0 0 0-28a14 14 0 0 1 0-30M50 44a5 5 0 1 0 10 0a5 5 0 0 0-10 0M68 44a5 5 0 1 0 10 0a5 5 0 0 0-10 0M85 64a5 5 0 1 0 10 0a5 5 0 0 0-10 0"
+  write_blueprint_icon "${apps_dir}/alexos-write.svg"        "WRT" "#38bdf8" "M44 35h24l14 14v42H44zM68 35v15h14M52 63h24M52 76h20M52 89h14"
+  write_blueprint_icon "${apps_dir}/alexos-draw.svg"        "DRW" "#f472b6" "M42 86l32-46 16 10-32 46zM42 86l14 4 2-14M74 40l8-6 6 10-8 6"
+  write_blueprint_icon "${apps_dir}/alexos-files.svg"       "FLS" "#60a5fa" "M36 52h24l8 8h28v36H36zM44 44h20l8 8"
+  write_blueprint_icon "${apps_dir}/alexos-calc.svg"        "CLC" "#4ade80" "M40 38h48v52H40zM40 54h48M40 70h48M58 38v52M76 38v52"
   write_blueprint_icon "${apps_dir}/gimp.svg" "ART" "#fbbf24" "M45 85c18-5 24-25 38-44M80 38l10 10M42 88l17-5"
   write_blueprint_icon "${apps_dir}/blender.svg" "3D" "#fb923c" "M40 65h28M54 51l14 14l-14 14M68 65a15 15 0 1 0 30 0a15 15 0 0 0-30 0"
   write_blueprint_icon "${apps_dir}/scribus.svg" "PAGE" "#818cf8" "M45 36h28l14 14v42H45zM73 36v15h14M55 64h22M55 78h18"
@@ -623,8 +627,10 @@ apply_overlay() {
   log "Applying chroot overlay"
   [[ -d "${OVERLAY_DIR}" ]] || die "Overlay directory missing: ${OVERLAY_DIR}"
   cp -a "${OVERLAY_DIR}/." "${CHROOT_DIR}/"
-  # Ensure new scripts are executable
-  chmod 0755 "${CHROOT_DIR}/usr/local/bin/alexos-icon-changer" 2>/dev/null || true
+  # Ensure all AlexOS scripts are executable
+  for _bin in alexos-icon-changer alexos-write alexos-draw alexos-files alexos-calc; do
+    chmod 0755 "${CHROOT_DIR}/usr/local/bin/${_bin}" 2>/dev/null || true
+  done
 }
 
 detect_source_commit() {
@@ -733,7 +739,7 @@ secondary-color='#00b4d8'
 
 [org/gnome/shell]
 enabled-extensions=['dash-to-dock@micxgx.gmail.com','user-theme@gnome-shell-extensions.gcampax.github.com']
-favorite-apps=['alexos-studio.desktop','google-chrome.desktop','org.gnome.Nautilus.desktop','librecad.desktop','freecad.desktop','org.inkscape.Inkscape.desktop','libreoffice-draw.desktop','org.gnome.TextEditor.desktop','alexos-software-updates.desktop','alexos-icon-changer.desktop']
+favorite-apps=['alexos-studio.desktop','google-chrome.desktop','alexos-files.desktop','librecad.desktop','freecad.desktop','alexos-draw.desktop','alexos-write.desktop','alexos-calc.desktop','alexos-software-updates.desktop','alexos-icon-changer.desktop']
 
 [org/gnome/shell/extensions/user-theme]
 name='WhiteSur-Dark'
@@ -759,6 +765,10 @@ configure_permissions() {
     /usr/local/bin/alexos-software-updates
     /usr/local/bin/alexos-studio
     /usr/local/bin/alexos-icon-changer
+    /usr/local/bin/alexos-write
+    /usr/local/bin/alexos-draw
+    /usr/local/bin/alexos-files
+    /usr/local/bin/alexos-calc
     /usr/local/bin/alexos-welcome
     /usr/local/sbin/alexos-update
     /usr/local/sbin/alexos-install-snap-store

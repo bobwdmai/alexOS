@@ -1,0 +1,511 @@
+#!/usr/bin/env python3
+"""AlexOS Files — blueprint-themed file manager."""
+
+import os
+import shutil
+import subprocess
+import sys
+from pathlib import Path
+
+import gi
+
+gi.require_version("Gtk", "4.0")
+gi.require_version("Adw", "1")
+gi.require_version("Gio", "2.0")
+from gi.repository import Adw, Gdk, GLib, Gio, Gtk
+
+APP_CSS = b"""
+window { background: #0a1929; color: #e0fbfc; }
+headerbar {
+  background: rgba(8,15,28,0.97);
+  border-bottom: 1px solid rgba(0,180,216,0.14);
+  color: #e0fbfc;
+}
+button {
+  border-radius: 6px; color: #94c8da;
+  border: 1px solid rgba(0,180,216,0.12);
+  background: rgba(0,180,216,0.05);
+  min-height: 30px; padding: 0 10px; font-weight: 600;
+}
+button:hover { background: rgba(0,180,216,0.13); color: #e0fbfc; }
+button.flat { background: transparent; border-color: transparent; }
+button.flat:hover { background: rgba(0,180,216,0.10); }
+button.pathseg {
+  border-radius: 4px; font-size: 13px;
+  min-height: 24px; padding: 0 8px; font-weight: 400;
+  border: none; background: transparent; color: #7dd3fc;
+}
+button.pathseg:hover { background: rgba(0,180,216,0.10); color: #e0fbfc; }
+separator { background: rgba(0,180,216,0.10); min-width:1px; min-height:1px; }
+scrollbar slider {
+  background: rgba(0,180,216,0.18); border-radius:4px;
+  min-width:5px; min-height:5px; margin:2px;
+}
+scrollbar slider:hover { background: rgba(0,180,216,0.32); }
+scrolledwindow { background: transparent; }
+.sidebar {
+  background: rgba(6,15,28,0.88);
+  border-right: 1px solid rgba(0,180,216,0.10);
+  min-width: 170px;
+}
+.sidebar-label {
+  color: #4a7a8f; font-size: 11px; font-weight: 700;
+  letter-spacing: 2px; padding: 8px 10px 4px 10px;
+}
+listbox { background: transparent; }
+listbox row {
+  color: #94c8da; border-radius: 6px;
+  padding: 5px 10px; margin: 1px 6px;
+}
+listbox row:selected, listbox row:selected:hover {
+  background: rgba(0,180,216,0.18); color: #e0fbfc;
+}
+listbox row:hover { background: rgba(0,180,216,0.08); }
+.file-grid { background: #060f1c; }
+.file-tile {
+  border-radius: 8px; padding: 8px 6px;
+  background: transparent;
+  border: 1px solid transparent;
+}
+.file-tile:hover { background: rgba(0,180,216,0.06); border-color: rgba(0,180,216,0.14); }
+.file-tile.selected { background: rgba(0,180,216,0.14); border-color: rgba(0,180,216,0.35); }
+.file-name { font-size: 12px; color: #b9c7d6; }
+.file-name.dir { color: #7dd3fc; font-weight: 600; }
+.pathbar {
+  background: rgba(6,15,28,0.85);
+  border-bottom: 1px solid rgba(0,180,216,0.10);
+  padding: 4px 10px;
+}
+.statusbar {
+  background: rgba(6,15,28,0.92);
+  border-top: 1px solid rgba(0,180,216,0.10);
+  color: #4a7a8f; font-size: 12px; padding: 3px 12px;
+}
+entry {
+  background: rgba(0,180,216,0.05); border: 1px solid rgba(0,180,216,0.18);
+  color: #e0fbfc; border-radius:6px; caret-color:#00b4d8; min-height:28px;
+}
+"""
+
+
+def apply_css():
+    p = Gtk.CssProvider()
+    p.load_from_data(APP_CSS)
+    d = Gdk.Display.get_default()
+    if d:
+        Gtk.StyleContext.add_provider_for_display(d, p, Gtk.STYLE_PROVIDER_PRIORITY_APPLICATION)
+
+
+BOOKMARKS = [
+    ("Home",      "user-home",         lambda: Path.home()),
+    ("Downloads", "folder-download",   lambda: Path.home() / "Downloads"),
+    ("Documents", "folder-documents",  lambda: Path.home() / "Documents"),
+    ("Pictures",  "image-x-generic",   lambda: Path.home() / "Pictures"),
+    ("Desktop",   "user-desktop",      lambda: Path.home() / "Desktop"),
+    ("Trash",     "user-trash",        lambda: Path(GLib.get_user_data_dir()) / "Trash/files"),
+]
+
+MIME_ICONS = {
+    ".py": "text-x-script", ".sh": "text-x-script", ".js": "text-x-script",
+    ".txt": "text-x-generic", ".md": "text-x-generic", ".rst": "text-x-generic",
+    ".png": "image-x-generic", ".jpg": "image-x-generic", ".jpeg": "image-x-generic",
+    ".gif": "image-x-generic", ".webp": "image-x-generic", ".svg": "image-x-generic",
+    ".pdf": "application-pdf",
+    ".zip": "application-zip", ".tar": "application-zip", ".gz": "application-zip",
+    ".mp4": "video-x-generic", ".mkv": "video-x-generic", ".avi": "video-x-generic",
+    ".mp3": "audio-x-generic", ".flac": "audio-x-generic", ".ogg": "audio-x-generic",
+}
+
+
+def file_icon(path: Path) -> str:
+    if path.is_dir():
+        return "folder"
+    return MIME_ICONS.get(path.suffix.lower(), "application-x-generic")
+
+
+class FilesApp(Adw.Application):
+    def __init__(self):
+        super().__init__(application_id="os.alex.files",
+                         flags=Gio.ApplicationFlags.HANDLES_OPEN)
+        self.window = None
+        self.current_dir = Path.home()
+        self.history: list[Path] = [self.current_dir]
+        self.hist_pos = 0
+        self.show_hidden = False
+        self._flow = None
+        self._path_box = None
+        self._status = None
+        self._selected: set[Path] = set()
+        self.connect("open", self._on_open_files)
+
+    def do_activate(self):
+        apply_css()
+        self._build()
+        self.navigate_to(self.current_dir, push=False)
+        self.window.present()
+
+    def _on_open_files(self, _app, files, *__):
+        apply_css()
+        self._build()
+        for f in files:
+            p = Path(f.get_path())
+            if p.is_dir():
+                self.navigate_to(p, push=False)
+        self.window.present()
+
+    # ── Build UI ──────────────────────────────────────────────────────────
+
+    def _build(self):
+        if self.window:
+            return
+
+        self.window = Adw.ApplicationWindow(application=self)
+        self.window.set_title("AlexOS Files")
+        self.window.set_default_size(1000, 650)
+
+        # Header
+        header = Adw.HeaderBar()
+
+        self._back_btn = Gtk.Button(label="←")
+        self._back_btn.add_css_class("flat")
+        self._back_btn.connect("clicked", self._go_back)
+        header.pack_start(self._back_btn)
+
+        self._fwd_btn = Gtk.Button(label="→")
+        self._fwd_btn.add_css_class("flat")
+        self._fwd_btn.connect("clicked", self._go_forward)
+        header.pack_start(self._fwd_btn)
+
+        up_btn = Gtk.Button(label="↑")
+        up_btn.add_css_class("flat")
+        up_btn.connect("clicked", lambda *_: self.navigate_to(self.current_dir.parent))
+        header.pack_start(up_btn)
+
+        home_btn = Gtk.Button(label="⌂")
+        home_btn.add_css_class("flat")
+        home_btn.connect("clicked", lambda *_: self.navigate_to(Path.home()))
+        header.pack_start(home_btn)
+
+        new_folder_btn = Gtk.Button(label="New Folder")
+        new_folder_btn.add_css_class("flat")
+        new_folder_btn.connect("clicked", self._on_new_folder)
+        header.pack_end(new_folder_btn)
+
+        hidden_btn = Gtk.ToggleButton(label="Hidden")
+        hidden_btn.add_css_class("flat")
+        hidden_btn.connect("toggled", self._on_hidden_toggled)
+        header.pack_end(hidden_btn)
+
+        # Path bar
+        self._path_box = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=2)
+        self._path_box.add_css_class("pathbar")
+
+        # Sidebar
+        sidebar = Gtk.Box(orientation=Gtk.Orientation.VERTICAL)
+        sidebar.add_css_class("sidebar")
+
+        bm_label = Gtk.Label(label="PLACES")
+        bm_label.add_css_class("sidebar-label")
+        bm_label.set_xalign(0)
+        sidebar.append(bm_label)
+
+        listbox = Gtk.ListBox()
+        listbox.set_selection_mode(Gtk.SelectionMode.NONE)
+        for name, icon, path_fn in BOOKMARKS:
+            row = Gtk.ListBoxRow()
+            box = Gtk.Box(spacing=10)
+            box.set_margin_top(2)
+            box.set_margin_bottom(2)
+            img = Gtk.Image.new_from_icon_name(icon)
+            img.set_pixel_size(16)
+            lbl = Gtk.Label(label=name)
+            lbl.set_xalign(0)
+            box.append(img)
+            box.append(lbl)
+            row.set_child(box)
+            row._path_fn = path_fn
+            listbox.append(row)
+        listbox.connect("row-activated", lambda _lb, row: self.navigate_to(row._path_fn()))
+        sidebar.append(listbox)
+
+        # File grid
+        scroll = Gtk.ScrolledWindow()
+        scroll.set_vexpand(True)
+        scroll.set_hexpand(True)
+
+        self._flow = Gtk.FlowBox()
+        self._flow.set_selection_mode(Gtk.SelectionMode.NONE)
+        self._flow.set_column_spacing(4)
+        self._flow.set_row_spacing(4)
+        self._flow.set_margin_top(8)
+        self._flow.set_margin_bottom(8)
+        self._flow.set_margin_start(8)
+        self._flow.set_margin_end(8)
+        self._flow.add_css_class("file-grid")
+        self._flow.set_homogeneous(False)
+        self._flow.set_max_children_per_line(20)
+        scroll.set_child(self._flow)
+
+        file_area = Gtk.Box(orientation=Gtk.Orientation.VERTICAL)
+        file_area.append(self._path_box)
+        file_area.append(scroll)
+
+        # Status
+        self._status = Gtk.Label(label="  Ready")
+        self._status.add_css_class("statusbar")
+        self._status.set_xalign(0)
+
+        paned = Gtk.Paned(orientation=Gtk.Orientation.HORIZONTAL)
+        paned.set_start_child(sidebar)
+        paned.set_end_child(file_area)
+        paned.set_position(170)
+
+        root = Gtk.Box(orientation=Gtk.Orientation.VERTICAL)
+        root.append(header)
+        root.append(paned)
+        root.append(self._status)
+        self.window.set_content(root)
+
+    # ── Navigation ────────────────────────────────────────────────────────
+
+    def navigate_to(self, path: Path, push=True):
+        if not path.exists():
+            return
+        self.current_dir = path
+        if push:
+            self.history = self.history[:self.hist_pos + 1]
+            self.history.append(path)
+            self.hist_pos = len(self.history) - 1
+        self._back_btn.set_sensitive(self.hist_pos > 0)
+        self._fwd_btn.set_sensitive(self.hist_pos < len(self.history) - 1)
+        self._refresh_path_bar()
+        self._refresh_files()
+
+    def _go_back(self, *_):
+        if self.hist_pos > 0:
+            self.hist_pos -= 1
+            self.navigate_to(self.history[self.hist_pos], push=False)
+
+    def _go_forward(self, *_):
+        if self.hist_pos < len(self.history) - 1:
+            self.hist_pos += 1
+            self.navigate_to(self.history[self.hist_pos], push=False)
+
+    def _refresh_path_bar(self):
+        while self._path_box.get_first_child():
+            self._path_box.remove(self._path_box.get_first_child())
+
+        parts = list(self.current_dir.parts)
+        cumulative = Path("/")
+        for part in parts:
+            cumulative = cumulative / part if part != "/" else Path("/")
+            btn = Gtk.Button(label=part if part != "/" else "⌂")
+            btn.add_css_class("pathseg")
+            path_snap = Path(cumulative)
+            btn.connect("clicked", lambda _b, p=path_snap: self.navigate_to(p))
+            self._path_box.append(btn)
+            if part != parts[-1]:
+                sep = Gtk.Label(label="/")
+                sep.add_css_class("pathseg")
+                self._path_box.append(sep)
+
+    def _refresh_files(self):
+        while self._flow.get_first_child():
+            self._flow.remove(self._flow.get_first_child())
+        self._selected.clear()
+
+        try:
+            entries = sorted(self.current_dir.iterdir(),
+                             key=lambda p: (not p.is_dir(), p.name.lower()))
+        except PermissionError:
+            self._status.set_text("  Permission denied")
+            return
+
+        count = 0
+        for entry in entries:
+            if not self.show_hidden and entry.name.startswith("."):
+                continue
+            tile = self._make_tile(entry)
+            self._flow.append(tile)
+            count += 1
+
+        dirs = sum(1 for e in (self.current_dir.iterdir() if self.current_dir.exists() else [])
+                   if e.is_dir() and (self.show_hidden or not e.name.startswith(".")))
+        self._status.set_text(f"  {count} items  ·  {dirs} folders")
+
+    def _make_tile(self, path: Path) -> Gtk.FlowBoxChild:
+        child = Gtk.FlowBoxChild()
+
+        box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=4)
+        box.add_css_class("file-tile")
+        box.set_size_request(90, 80)
+        box.set_halign(Gtk.Align.CENTER)
+
+        icon = Gtk.Image.new_from_icon_name(file_icon(path))
+        icon.set_pixel_size(40)
+        box.append(icon)
+
+        name = Gtk.Label(label=path.name)
+        name.add_css_class("file-name")
+        if path.is_dir():
+            name.add_css_class("dir")
+        name.set_wrap(True)
+        name.set_justify(Gtk.Justification.CENTER)
+        name.set_max_width_chars(10)
+        name.set_ellipsize(3)
+        box.append(name)
+
+        child.set_child(box)
+
+        # Double-click to open
+        click = Gtk.GestureClick()
+        click.connect("pressed", lambda _g, n, _x, _y, p=path: self._on_tile_click(p, n))
+        child.add_controller(click)
+
+        # Right-click context menu
+        rclick = Gtk.GestureClick()
+        rclick.set_button(3)
+        rclick.connect("pressed", lambda _g, _n, x, y, p=path, ch=child: self._show_context(p, x, y))
+        child.add_controller(rclick)
+
+        return child
+
+    def _on_tile_click(self, path: Path, n_press: int):
+        if n_press >= 2:
+            if path.is_dir():
+                self.navigate_to(path)
+            else:
+                subprocess.Popen(["xdg-open", str(path)])
+
+    def _show_context(self, path: Path, x, y):
+        menu = Gio.Menu()
+        if path.is_dir():
+            menu.append("Open Folder", f"app.open_path::{path}")
+        else:
+            menu.append("Open", f"app.open_path::{path}")
+        menu.append("Copy Name", f"app.copy_name::{path.name}")
+        menu.append("Delete", f"app.delete_file::{path}")
+        menu.append("Rename…", f"app.rename_file::{path}")
+
+        popover = Gtk.PopoverMenu.new_from_model(menu)
+        popover.set_has_arrow(False)
+        popover.set_parent(self.window)
+        rect = Gdk.Rectangle()
+        rect.x, rect.y, rect.width, rect.height = int(x), int(y), 1, 1
+        popover.set_pointing_to(rect)
+
+        # Wire simple actions
+        def make_action(name, cb):
+            a = Gio.SimpleAction(name=name)
+            a.connect("activate", cb)
+            self.add_action(a)
+
+        if not self.lookup_action("open_path_action"):
+            pass
+
+        # Fall back to inline handler since Gio.Menu actions are complex
+        popover.destroy()
+        self._inline_context(path)
+
+    def _inline_context(self, path: Path):
+        dlg = Gtk.Dialog(title=path.name, transient_for=self.window, modal=True)
+        dlg.set_default_size(260, 10)
+
+        for label, cb in [
+            ("Open", lambda *_: (subprocess.Popen(["xdg-open", str(path)]), dlg.destroy())),
+            ("Rename…", lambda *_: (dlg.destroy(), self._rename_dialog(path))),
+            ("Delete", lambda *_: (self._delete(path), dlg.destroy())),
+            ("Copy Path", lambda *_: (self._copy_to_clipboard(str(path)), dlg.destroy())),
+        ]:
+            btn = Gtk.Button(label=label)
+            btn.set_margin_start(10)
+            btn.set_margin_end(10)
+            btn.set_margin_top(4)
+            btn.set_margin_bottom(4)
+            btn.connect("clicked", cb)
+            dlg.get_content_area().append(btn)
+
+        close_btn = Gtk.Button(label="Close")
+        close_btn.set_margin_start(10)
+        close_btn.set_margin_end(10)
+        close_btn.set_margin_top(8)
+        close_btn.set_margin_bottom(10)
+        close_btn.connect("clicked", lambda *_: dlg.destroy())
+        dlg.get_content_area().append(close_btn)
+        dlg.present()
+
+    def _delete(self, path: Path):
+        try:
+            if path.is_dir():
+                shutil.rmtree(str(path))
+            else:
+                path.unlink()
+            self._refresh_files()
+        except OSError as e:
+            self._status.set_text(f"  Error: {e}")
+
+    def _rename_dialog(self, path: Path):
+        dlg = Gtk.Dialog(title="Rename", transient_for=self.window, modal=True)
+        dlg.add_button("Cancel", Gtk.ResponseType.CANCEL)
+        dlg.add_button("Rename", Gtk.ResponseType.OK)
+        entry = Gtk.Entry()
+        entry.set_text(path.name)
+        entry.set_margin_top(12)
+        entry.set_margin_bottom(12)
+        entry.set_margin_start(12)
+        entry.set_margin_end(12)
+        dlg.get_content_area().append(entry)
+
+        def on_response(d, r):
+            if r == Gtk.ResponseType.OK:
+                new_name = entry.get_text().strip()
+                if new_name and new_name != path.name:
+                    try:
+                        path.rename(path.parent / new_name)
+                        self._refresh_files()
+                    except OSError as e:
+                        self._status.set_text(f"  {e}")
+            d.destroy()
+
+        dlg.connect("response", on_response)
+        dlg.present()
+
+    def _on_new_folder(self, *_):
+        dlg = Gtk.Dialog(title="New Folder", transient_for=self.window, modal=True)
+        dlg.add_button("Cancel", Gtk.ResponseType.CANCEL)
+        dlg.add_button("Create", Gtk.ResponseType.OK)
+        entry = Gtk.Entry()
+        entry.set_text("New Folder")
+        entry.set_margin_top(12)
+        entry.set_margin_bottom(12)
+        entry.set_margin_start(12)
+        entry.set_margin_end(12)
+        dlg.get_content_area().append(entry)
+
+        def on_response(d, r):
+            if r == Gtk.ResponseType.OK:
+                name = entry.get_text().strip()
+                if name:
+                    try:
+                        (self.current_dir / name).mkdir()
+                        self._refresh_files()
+                    except OSError as e:
+                        self._status.set_text(f"  {e}")
+            d.destroy()
+
+        dlg.connect("response", on_response)
+        dlg.present()
+
+    def _on_hidden_toggled(self, btn):
+        self.show_hidden = btn.get_active()
+        self._refresh_files()
+
+    def _copy_to_clipboard(self, text: str):
+        display = Gdk.Display.get_default()
+        if display:
+            clipboard = display.get_clipboard()
+            clipboard.set(text)
+
+
+if __name__ == "__main__":
+    raise SystemExit(FilesApp().run(sys.argv))

@@ -1,0 +1,486 @@
+#!/usr/bin/env python3
+"""AlexOS Write — blueprint-themed multi-tab text & code editor."""
+
+import sys
+from pathlib import Path
+
+import gi
+
+gi.require_version("Gtk", "4.0")
+gi.require_version("Adw", "1")
+from gi.repository import Adw, Gdk, GLib, Gio, Gtk
+
+APP_CSS = b"""
+window { background: #0a1929; color: #e0fbfc; }
+headerbar {
+  background: rgba(8,15,28,0.97);
+  border-bottom: 1px solid rgba(0,180,216,0.14);
+  color: #e0fbfc;
+}
+button {
+  border-radius: 6px; color: #94c8da;
+  border: 1px solid rgba(0,180,216,0.12);
+  background: rgba(0,180,216,0.05);
+  min-height: 30px; padding: 0 10px; font-weight: 600;
+}
+button:hover { background: rgba(0,180,216,0.13); color: #e0fbfc; }
+button.suggested-action {
+  background: linear-gradient(135deg,#005e80,#00b4d8);
+  color:#fff; border-color:rgba(0,180,216,0.3);
+}
+button.flat { background: transparent; border-color: transparent; }
+button.flat:hover { background: rgba(0,180,216,0.10); }
+button.tab-x { min-height:18px; min-width:18px; padding:2px; border:none; background:transparent; }
+button.tab-x:hover { background: rgba(239,68,68,0.18); color:#fca5a5; border:none; }
+separator { background: rgba(0,180,216,0.10); min-width:1px; min-height:1px; }
+textview, textview text {
+  background: #060f1c; color: #e0fbfc;
+  font-family: "Monospace", monospace; font-size: 14px;
+  caret-color: #00b4d8;
+}
+textview text selection { background: rgba(0,180,216,0.28); color: #e0fbfc; }
+scrollbar slider {
+  background: rgba(0,180,216,0.18); border-radius:4px;
+  min-width:5px; min-height:5px; margin:2px;
+}
+scrollbar slider:hover { background: rgba(0,180,216,0.32); }
+scrolledwindow { background: transparent; }
+entry {
+  background: rgba(0,180,216,0.05); border: 1px solid rgba(0,180,216,0.18);
+  color: #e0fbfc; border-radius:6px; caret-color:#00b4d8; min-height:30px;
+}
+entry:focus { border-color: rgba(0,180,216,0.50); }
+notebook header {
+  background: rgba(6,15,28,0.92);
+  border-bottom: 1px solid rgba(0,180,216,0.12);
+}
+notebook tab { color:#4a7a8f; padding:5px 8px; }
+notebook tab:checked { color:#e0fbfc; box-shadow: inset 0 -2px 0 #00b4d8; }
+notebook tab label { font-size:13px; }
+.gutter {
+  background: #060f1c;
+  border-right: 1px solid rgba(0,180,216,0.10);
+  min-width: 48px;
+}
+.find-bar {
+  background: rgba(6,15,28,0.95);
+  border-top: 1px solid rgba(0,180,216,0.12);
+  padding: 5px 10px;
+}
+.statusbar {
+  background: rgba(6,15,28,0.92);
+  border-top: 1px solid rgba(0,180,216,0.10);
+  color: #4a7a8f; font-size: 12px; padding: 3px 12px;
+}
+"""
+
+
+def apply_css():
+    p = Gtk.CssProvider()
+    p.load_from_data(APP_CSS)
+    d = Gdk.Display.get_default()
+    if d:
+        Gtk.StyleContext.add_provider_for_display(d, p, Gtk.STYLE_PROVIDER_PRIORITY_APPLICATION)
+
+
+# ── Per-tab state ─────────────────────────────────────────────────────────────
+
+class EditorTab:
+    def __init__(self, path: Path | None = None):
+        self.path = path
+        self.modified = False
+        self._title_label: Gtk.Label | None = None
+
+        self.buf = Gtk.TextBuffer()
+        self.buf.connect("changed", self._changed)
+
+        self.view = Gtk.TextView(buffer=self.buf)
+        self.view.set_wrap_mode(Gtk.WrapMode.WORD_CHAR)
+        self.view.set_left_margin(8)
+        self.view.set_right_margin(8)
+        self.view.set_top_margin(6)
+        self.view.set_bottom_margin(6)
+        self.view.set_monospace(True)
+
+        scroll = Gtk.ScrolledWindow()
+        scroll.set_vexpand(True)
+        scroll.set_hexpand(True)
+        scroll.set_child(self.view)
+        self._scroll = scroll
+
+        self.gutter = Gtk.DrawingArea()
+        self.gutter.set_content_width(48)
+        self.gutter.add_css_class("gutter")
+        self.gutter.set_draw_func(self._draw_gutter)
+        self.buf.connect("changed", lambda *_: self.gutter.queue_draw())
+        scroll.get_vadjustment().connect("value-changed", lambda *_: self.gutter.queue_draw())
+
+        self.widget = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL)
+        self.widget.append(self.gutter)
+        self.widget.append(scroll)
+
+        if path and path.exists():
+            try:
+                self.buf.set_text(path.read_text("utf-8", errors="replace"))
+                self.modified = False
+            except OSError:
+                pass
+
+    def _changed(self, *_):
+        self.modified = True
+        if self._title_label:
+            self._title_label.set_text(self._tab_name())
+
+    def _tab_name(self) -> str:
+        n = self.path.name if self.path else "Untitled"
+        return ("● " if self.modified else "") + n
+
+    def save(self, path: Path | None = None) -> bool:
+        t = path or self.path
+        if not t:
+            return False
+        try:
+            s, e = self.buf.get_bounds()
+            t.write_text(self.buf.get_text(s, e, True), "utf-8")
+            self.path = t
+            self.modified = False
+            if self._title_label:
+                self._title_label.set_text(self._tab_name())
+            return True
+        except OSError:
+            return False
+
+    def _draw_gutter(self, _area, cr, width, height):
+        cr.set_source_rgb(0.024, 0.059, 0.110)
+        cr.paint()
+        cr.set_source_rgba(0, 0.706, 0.847, 0.10)
+        cr.set_line_width(1)
+        cr.move_to(width - 0.5, 0)
+        cr.line_to(width - 0.5, height)
+        cr.stroke()
+
+        visible = self.view.get_visible_rect()
+        ok, it = self.view.get_iter_at_location(visible.x, visible.y)
+        it.set_line_offset(0)
+        cr.select_font_face("Monospace", 0, 0)
+        cr.set_font_size(12)
+        cr.set_source_rgba(0.35, 0.51, 0.58, 0.85)
+
+        seen = set()
+        while True:
+            ln = it.get_line()
+            if ln in seen:
+                break
+            seen.add(ln)
+            y, lh = self.view.get_line_yrange(it)
+            _, wy = self.view.buffer_to_window_coords(Gtk.TextWindowType.TEXT, 0, y)
+            if wy > height:
+                break
+            if wy + lh > 0:
+                label = str(ln + 1)
+                te = cr.text_extents(label)
+                cr.move_to(width - te[2] - 8, wy + lh * 0.75)
+                cr.show_text(label)
+            if not it.forward_line():
+                break
+
+
+# ── Application ───────────────────────────────────────────────────────────────
+
+class WriteApp(Adw.Application):
+    def __init__(self):
+        super().__init__(application_id="os.alex.write",
+                         flags=Gio.ApplicationFlags.HANDLES_OPEN)
+        self.window = None
+        self.notebook: Gtk.Notebook | None = None
+        self.tabs: list[EditorTab] = []
+        self._find_bar = None
+        self._find_entry = None
+        self._replace_entry = None
+        self._find_toggle = None
+        self._status = None
+        self.connect("open", self._on_open_files)
+
+    def do_activate(self):
+        apply_css()
+        self._build()
+        if not self.tabs:
+            self._new_tab()
+        self.window.present()
+
+    def _on_open_files(self, _app, files, *__):
+        apply_css()
+        self._build()
+        for f in files:
+            self._open_path(Path(f.get_path()))
+        self.window.present()
+
+    # ── Build UI ──────────────────────────────────────────────────────────
+
+    def _build(self):
+        if self.window:
+            return
+
+        self.window = Adw.ApplicationWindow(application=self)
+        self.window.set_title("AlexOS Write")
+        self.window.set_default_size(960, 700)
+
+        header = Adw.HeaderBar()
+        for label, cb, side, extra_class in [
+            ("New",     lambda *_: self._new_tab(),   "start", "flat"),
+            ("Open",    self._on_open,                "start", "flat"),
+            ("Save",    self._on_save,                "end",   "suggested-action"),
+            ("Save As", self._on_save_as,             "end",   "flat"),
+        ]:
+            b = Gtk.Button(label=label)
+            b.add_css_class(extra_class)
+            b.connect("clicked", cb)
+            (header.pack_start if side == "start" else header.pack_end)(b)
+
+        ft = Gtk.ToggleButton(label="Find")
+        ft.add_css_class("flat")
+        ft.connect("toggled", self._find_toggled)
+        header.pack_end(ft)
+        self._find_toggle = ft
+
+        self.notebook = Gtk.Notebook()
+        self.notebook.set_scrollable(True)
+        self.notebook.set_show_border(False)
+        self.notebook.connect("switch-page", lambda *_: self._update_status())
+
+        self._find_bar = self._build_find_bar()
+        self._find_bar.set_visible(False)
+
+        self._status = Gtk.Label(label="  Ready")
+        self._status.add_css_class("statusbar")
+        self._status.set_xalign(0)
+
+        root = Gtk.Box(orientation=Gtk.Orientation.VERTICAL)
+        root.append(header)
+        root.append(self.notebook)
+        root.append(self._find_bar)
+        root.append(self._status)
+        self.window.set_content(root)
+
+        ek = Gtk.EventControllerKey()
+        ek.connect("key-pressed", self._key_pressed)
+        self.window.add_controller(ek)
+
+    def _build_find_bar(self):
+        bar = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=6)
+        bar.add_css_class("find-bar")
+
+        self._find_entry = Gtk.Entry()
+        self._find_entry.set_placeholder_text("Find…")
+        self._find_entry.set_hexpand(True)
+        self._find_entry.connect("activate", lambda *_: self._find_next())
+        bar.append(self._find_entry)
+
+        self._replace_entry = Gtk.Entry()
+        self._replace_entry.set_placeholder_text("Replace with…")
+        self._replace_entry.set_hexpand(True)
+        bar.append(self._replace_entry)
+
+        for label, cb in [("↑", lambda *_: self._find_next(True)),
+                           ("↓", lambda *_: self._find_next()),
+                           ("Replace", lambda *_: self._replace_one()),
+                           ("All", lambda *_: self._replace_all()),
+                           ("✕", lambda *_: self._hide_find())]:
+            b = Gtk.Button(label=label)
+            b.add_css_class("flat")
+            b.connect("clicked", cb)
+            bar.append(b)
+        return bar
+
+    # ── Tab management ────────────────────────────────────────────────────
+
+    def _new_tab(self, path: Path | None = None) -> EditorTab:
+        tab = EditorTab(path)
+        self.tabs.append(tab)
+
+        tab_label_box = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=4)
+        lbl = Gtk.Label(label=tab._tab_name())
+        lbl.add_css_class("tab-title")
+        tab._title_label = lbl
+        tab_label_box.append(lbl)
+
+        x_btn = Gtk.Button()
+        x_btn.set_child(Gtk.Label(label="✕"))
+        x_btn.add_css_class("tab-x")
+        x_btn.connect("clicked", lambda _b, t=tab: self._close_tab(t))
+        tab_label_box.append(x_btn)
+
+        tab.buf.connect("mark-set", lambda *_: GLib.idle_add(self._update_status))
+
+        idx = self.notebook.append_page(tab.widget, tab_label_box)
+        self.notebook.set_current_page(idx)
+        return tab
+
+    def _close_tab(self, tab: EditorTab):
+        if len(self.tabs) <= 1:
+            return
+        idx = self.tabs.index(tab)
+        self.tabs.remove(tab)
+        self.notebook.remove_page(idx)
+
+    def _current_tab(self) -> EditorTab | None:
+        idx = self.notebook.get_current_page()
+        return self.tabs[idx] if 0 <= idx < len(self.tabs) else None
+
+    def _open_path(self, path: Path):
+        for i, t in enumerate(self.tabs):
+            if t.path == path:
+                self.notebook.set_current_page(i)
+                return
+        cur = self._current_tab()
+        if cur and not cur.path and not cur.modified:
+            cur.path = path
+            try:
+                cur.buf.set_text(path.read_text("utf-8", errors="replace"))
+                cur.modified = False
+                if cur._title_label:
+                    cur._title_label.set_text(cur._tab_name())
+            except OSError:
+                pass
+        else:
+            self._new_tab(path)
+
+    def _update_status(self):
+        tab = self._current_tab()
+        if not tab:
+            return
+        it = tab.buf.get_iter_at_mark(tab.buf.get_insert())
+        ln, col = it.get_line() + 1, it.get_line_offset() + 1
+        words = len(tab.buf.get_text(*tab.buf.get_bounds(), True).split())
+        self._status.set_text(f"  Ln {ln}, Col {col}  ·  {words} words")
+
+    # ── File I/O ──────────────────────────────────────────────────────────
+
+    def _on_open(self, *_):
+        dlg = Gtk.FileChooserDialog(title="Open", transient_for=self.window,
+                                    action=Gtk.FileChooserAction.OPEN)
+        dlg.add_button("Cancel", Gtk.ResponseType.CANCEL)
+        dlg.add_button("Open", Gtk.ResponseType.ACCEPT)
+        dlg.set_modal(True)
+        dlg.connect("response", lambda d, r: (self._open_path(Path(d.get_file().get_path()))
+                                               if r == Gtk.ResponseType.ACCEPT and d.get_file()
+                                               else None) or d.destroy())
+        dlg.present()
+
+    def _on_save(self, *_):
+        tab = self._current_tab()
+        if not tab:
+            return
+        if tab.path:
+            tab.save()
+        else:
+            self._on_save_as()
+
+    def _on_save_as(self, *_):
+        tab = self._current_tab()
+        if not tab:
+            return
+        dlg = Gtk.FileChooserDialog(title="Save As", transient_for=self.window,
+                                    action=Gtk.FileChooserAction.SAVE)
+        dlg.add_button("Cancel", Gtk.ResponseType.CANCEL)
+        dlg.add_button("Save", Gtk.ResponseType.ACCEPT)
+        dlg.set_modal(True)
+        dlg.set_current_name(tab.path.name if tab.path else "Untitled.txt")
+        dlg.connect("response", lambda d, r, t=tab: (t.save(Path(d.get_file().get_path()))
+                                                       if r == Gtk.ResponseType.ACCEPT and d.get_file()
+                                                       else None) or d.destroy())
+        dlg.present()
+
+    # ── Find / Replace ────────────────────────────────────────────────────
+
+    def _find_toggled(self, btn):
+        self._find_bar.set_visible(btn.get_active())
+        if btn.get_active():
+            self._find_entry.grab_focus()
+
+    def _hide_find(self):
+        self._find_bar.set_visible(False)
+        self._find_toggle.set_active(False)
+
+    def _find_next(self, backward=False):
+        tab = self._current_tab()
+        if not tab:
+            return
+        needle = self._find_entry.get_text()
+        if not needle:
+            return
+        buf = tab.buf
+        flags = Gtk.TextSearchFlags.CASE_INSENSITIVE | Gtk.TextSearchFlags.TEXT_ONLY
+        it = buf.get_iter_at_mark(buf.get_mark("insert"))
+        if backward:
+            found = it.backward_search(needle, flags, None)
+        else:
+            it.forward_char()
+            found = it.forward_search(needle, flags, None)
+        if not found:
+            wrap = buf.get_start_iter() if not backward else buf.get_end_iter()
+            found = (wrap.backward_search if backward else wrap.forward_search)(needle, flags, None)
+        if found:
+            s, e = found
+            buf.select_range(s, e)
+            tab.view.scroll_to_iter(s, 0.2, False, 0, 0)
+
+    def _replace_one(self):
+        tab = self._current_tab()
+        if not tab:
+            return
+        buf = tab.buf
+        needle = self._find_entry.get_text()
+        repl = self._replace_entry.get_text()
+        if buf.get_has_selection():
+            s, e = buf.get_selection_bounds()
+            if buf.get_text(s, e, True).lower() == needle.lower():
+                buf.delete(s, e)
+                buf.insert(s, repl)
+        self._find_next()
+
+    def _replace_all(self):
+        tab = self._current_tab()
+        if not tab:
+            return
+        buf = tab.buf
+        needle = self._find_entry.get_text()
+        repl = self._replace_entry.get_text()
+        if not needle:
+            return
+        flags = Gtk.TextSearchFlags.CASE_INSENSITIVE | Gtk.TextSearchFlags.TEXT_ONLY
+        buf.begin_user_action()
+        it = buf.get_start_iter()
+        count = 0
+        while True:
+            found = it.forward_search(needle, flags, None)
+            if not found:
+                break
+            s, e = found
+            buf.delete(s, e)
+            buf.insert(s, repl)
+            it = buf.get_iter_at_offset(s.get_offset() + len(repl))
+            count += 1
+        buf.end_user_action()
+        self._status.set_text(f"  Replaced {count} occurrence{'s' if count != 1 else ''}")
+
+    # ── Keyboard shortcuts ────────────────────────────────────────────────
+
+    def _key_pressed(self, _ctrl, keyval, _code, state):
+        ctrl = state & Gdk.ModifierType.CONTROL_MASK
+        shift = state & Gdk.ModifierType.SHIFT_MASK
+        if ctrl and not shift:
+            if keyval == Gdk.KEY_n: self._new_tab(); return True
+            if keyval == Gdk.KEY_o: self._on_open(); return True
+            if keyval == Gdk.KEY_s: self._on_save(); return True
+            if keyval == Gdk.KEY_f:
+                self._find_toggle.set_active(not self._find_toggle.get_active()); return True
+        if ctrl and shift and keyval == Gdk.KEY_S:
+            self._on_save_as(); return True
+        if keyval == Gdk.KEY_Escape:
+            self._hide_find(); return True
+        return False
+
+
+if __name__ == "__main__":
+    raise SystemExit(WriteApp().run(sys.argv))

@@ -1,0 +1,505 @@
+#!/usr/bin/env python3
+"""AlexOS Calc — blueprint-themed spreadsheet with formula engine."""
+
+import csv
+import re
+import sys
+from pathlib import Path
+
+import gi
+
+gi.require_version("Gtk", "4.0")
+gi.require_version("Adw", "1")
+from gi.repository import Adw, Gdk, GLib, Gio, Gtk
+
+APP_CSS = b"""
+window { background: #0a1929; color: #e0fbfc; }
+headerbar {
+  background: rgba(8,15,28,0.97);
+  border-bottom: 1px solid rgba(0,180,216,0.14);
+  color: #e0fbfc;
+}
+button {
+  border-radius: 6px; color: #94c8da;
+  border: 1px solid rgba(0,180,216,0.12);
+  background: rgba(0,180,216,0.05);
+  min-height: 30px; padding: 0 10px; font-weight: 600;
+}
+button:hover { background: rgba(0,180,216,0.13); color: #e0fbfc; }
+button.flat { background: transparent; border-color: transparent; }
+button.flat:hover { background: rgba(0,180,216,0.10); }
+button.suggested-action {
+  background: linear-gradient(135deg,#005e80,#00b4d8);
+  color:#fff; border-color:rgba(0,180,216,0.3);
+}
+separator { background: rgba(0,180,216,0.10); min-width:1px; min-height:1px; }
+scrollbar slider {
+  background: rgba(0,180,216,0.18); border-radius:4px;
+  min-width:5px; min-height:5px; margin:2px;
+}
+scrollbar slider:hover { background: rgba(0,180,216,0.32); }
+scrolledwindow { background: transparent; }
+treeview {
+  background: #060f1c; color: #e0fbfc;
+  font-family: "Monospace", monospace; font-size: 13px;
+}
+treeview:selected {
+  background: rgba(0,180,216,0.22); color: #e0fbfc;
+}
+treeview header button {
+  background: rgba(4,12,24,0.95); color: #4a7a8f;
+  border-bottom: 1px solid rgba(0,180,216,0.14);
+  border-top: none; border-left: none;
+  border-right: 1px solid rgba(0,180,216,0.08);
+  border-radius: 0; font-weight: 700; font-size: 12px;
+  letter-spacing: 1px; min-height: 26px;
+}
+.formula-bar {
+  background: rgba(6,15,28,0.92);
+  border-bottom: 1px solid rgba(0,180,216,0.12);
+  padding: 4px 10px;
+}
+.cell-ref {
+  background: rgba(0,180,216,0.06);
+  border: 1px solid rgba(0,180,216,0.18);
+  color: #00b4d8; border-radius: 4px;
+  min-width: 52px; min-height: 28px;
+  font-family: Monospace; font-size: 12px; font-weight: 700;
+  padding: 0 6px;
+}
+.formula-entry {
+  background: rgba(0,180,216,0.04);
+  border: 1px solid rgba(0,180,216,0.16);
+  color: #e0fbfc; border-radius: 4px;
+  caret-color: #00b4d8; font-family: Monospace;
+  font-size: 13px; min-height: 28px;
+}
+.formula-entry:focus { border-color: rgba(0,180,216,0.50); }
+.statusbar {
+  background: rgba(6,15,28,0.92);
+  border-top: 1px solid rgba(0,180,216,0.10);
+  color: #4a7a8f; font-size: 12px; padding: 3px 12px;
+}
+entry {
+  background: rgba(0,180,216,0.05); border: 1px solid rgba(0,180,216,0.18);
+  color: #e0fbfc; border-radius: 6px; caret-color: #00b4d8;
+}
+"""
+
+
+COLS = list("ABCDEFGHIJKLMNOPQRSTUVWXYZ")
+NUM_ROWS = 200
+NUM_COLS = len(COLS)
+
+
+def col_name(i: int) -> str:
+    return COLS[i] if i < len(COLS) else f"A{i - len(COLS)}"
+
+
+def cell_addr(row: int, col: int) -> str:
+    return f"{col_name(col)}{row + 1}"
+
+
+def parse_addr(addr: str) -> tuple[int, int] | None:
+    """Parse 'B3' → (row=2, col=1). Returns None if invalid."""
+    m = re.fullmatch(r"([A-Z]+)(\d+)", addr.strip().upper())
+    if not m:
+        return None
+    col_str, row_str = m.group(1), m.group(2)
+    if len(col_str) == 1:
+        col = ord(col_str) - ord("A")
+    else:
+        return None
+    row = int(row_str) - 1
+    if 0 <= row < NUM_ROWS and 0 <= col < NUM_COLS:
+        return row, col
+    return None
+
+
+def apply_css():
+    p = Gtk.CssProvider()
+    p.load_from_data(APP_CSS)
+    d = Gdk.Display.get_default()
+    if d:
+        Gtk.StyleContext.add_provider_for_display(d, p, Gtk.STYLE_PROVIDER_PRIORITY_APPLICATION)
+
+
+# ── Formula engine ────────────────────────────────────────────────────────────
+
+class FormulaEngine:
+    def __init__(self, data: dict):
+        self.data = data  # {(row, col): raw_string}
+
+    def get_value(self, row: int, col: int) -> float | str:
+        raw = self.data.get((row, col), "")
+        return self.evaluate(raw)
+
+    def evaluate(self, raw: str) -> float | str:
+        if not raw.startswith("="):
+            try:
+                return float(raw) if raw.strip() else ""
+            except ValueError:
+                return raw
+
+        expr = raw[1:].strip()
+
+        # Handle built-in functions
+        for fn in ("SUM", "AVG", "AVERAGE", "COUNT", "MIN", "MAX"):
+            m = re.fullmatch(rf"{fn}\(([A-Z]+\d+):([A-Z]+\d+)\)", expr, re.IGNORECASE)
+            if m:
+                values = self._range_values(m.group(1), m.group(2))
+                if not values:
+                    return 0
+                if fn == "SUM":
+                    return sum(values)
+                if fn in ("AVG", "AVERAGE"):
+                    return sum(values) / len(values)
+                if fn == "COUNT":
+                    return len(values)
+                if fn == "MIN":
+                    return min(values)
+                if fn == "MAX":
+                    return max(values)
+
+        # Replace cell references A1, B2, etc.
+        def replace_ref(match):
+            addr = match.group(0).upper()
+            pos = parse_addr(addr)
+            if pos is None:
+                return "0"
+            val = self.get_value(*pos)
+            if isinstance(val, (int, float)):
+                return str(val)
+            try:
+                return str(float(val))
+            except (ValueError, TypeError):
+                return "0"
+
+        expr2 = re.sub(r"[A-Z]+\d+", replace_ref, expr, flags=re.IGNORECASE)
+
+        try:
+            result = eval(expr2, {"__builtins__": {}},
+                          {"abs": abs, "round": round, "int": int, "float": float})
+            if isinstance(result, float) and result == int(result):
+                return int(result)
+            return result
+        except Exception:
+            return "#ERR"
+
+    def _range_values(self, start: str, end: str) -> list[float]:
+        a = parse_addr(start)
+        b = parse_addr(end)
+        if a is None or b is None:
+            return []
+        r1, c1 = min(a[0], b[0]), min(a[1], b[1])
+        r2, c2 = max(a[0], b[0]), max(a[1], b[1])
+        values = []
+        for r in range(r1, r2 + 1):
+            for c in range(c1, c2 + 1):
+                raw = self.data.get((r, c), "")
+                try:
+                    v = float(self.evaluate(raw))
+                    values.append(v)
+                except (ValueError, TypeError):
+                    pass
+        return values
+
+    def display(self, row: int, col: int) -> str:
+        val = self.get_value(row, col)
+        if val == "":
+            return ""
+        if isinstance(val, float):
+            if val == int(val):
+                return str(int(val))
+            return f"{val:.4g}"
+        return str(val)
+
+
+# ── Spreadsheet model (GtkListStore) ─────────────────────────────────────────
+
+class CalcApp(Adw.Application):
+    def __init__(self):
+        super().__init__(application_id="os.alex.calc",
+                         flags=Gio.ApplicationFlags.HANDLES_OPEN)
+        self.window = None
+        self.path: Path | None = None
+        self.data: dict[tuple[int, int], str] = {}  # raw cell values
+        self.engine = FormulaEngine(self.data)
+        self._store: Gtk.ListStore | None = None
+        self._tree: Gtk.TreeView | None = None
+        self._cell_ref_label: Gtk.Label | None = None
+        self._formula_entry: Gtk.Entry | None = None
+        self._status: Gtk.Label | None = None
+        self._cur_row = 0
+        self._cur_col = 0
+        self._editing = False
+        self.connect("open", self._on_open_files)
+
+    def do_activate(self):
+        apply_css()
+        self._build()
+        self.window.present()
+
+    def _on_open_files(self, _app, files, *__):
+        apply_css()
+        self._build()
+        for f in files:
+            self._load_csv(Path(f.get_path()))
+        self.window.present()
+
+    # ── Build UI ──────────────────────────────────────────────────────────
+
+    def _build(self):
+        if self.window:
+            return
+
+        self.window = Adw.ApplicationWindow(application=self)
+        self.window.set_title("AlexOS Calc")
+        self.window.set_default_size(1050, 700)
+
+        # Header
+        header = Adw.HeaderBar()
+        for label, cb, cls in [
+            ("New",      self._on_new,     "flat"),
+            ("Open CSV", self._on_open,    "flat"),
+            ("Save CSV", self._on_save,    "suggested-action"),
+        ]:
+            b = Gtk.Button(label=label)
+            b.add_css_class(cls)
+            b.connect("clicked", cb)
+            (header.pack_start if cls == "flat" else header.pack_end)(b)
+
+        # Formula bar
+        formula_bar = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=6)
+        formula_bar.add_css_class("formula-bar")
+
+        self._cell_ref_label = Gtk.Label(label="A1")
+        self._cell_ref_label.add_css_class("cell-ref")
+        formula_bar.append(self._cell_ref_label)
+
+        eq_label = Gtk.Label(label="ƒx")
+        eq_label.set_markup('<span color="#4a7a8f" font="Monospace 12"><b>ƒx</b></span>')
+        eq_label.set_margin_start(4)
+        eq_label.set_margin_end(4)
+        formula_bar.append(eq_label)
+
+        self._formula_entry = Gtk.Entry()
+        self._formula_entry.add_css_class("formula-entry")
+        self._formula_entry.set_hexpand(True)
+        self._formula_entry.connect("activate", self._formula_committed)
+        self._formula_entry.connect("changed", self._formula_changed)
+        formula_bar.append(self._formula_entry)
+
+        # Build GtkListStore: col 0 = row number string, cols 1..26 = cell data
+        col_types = [str] * (NUM_COLS + 1)
+        self._store = Gtk.ListStore(*col_types)
+        for r in range(NUM_ROWS):
+            self._store.append([str(r + 1)] + [""] * NUM_COLS)
+
+        # GtkTreeView
+        self._tree = Gtk.TreeView(model=self._store)
+        self._tree.set_enable_grid_lines(Gtk.TreeViewGridLines.BOTH)
+        self._tree.set_fixed_height_mode(True)
+        self._tree.connect("cursor-changed", self._on_cursor_changed)
+
+        # Row-number column (not editable)
+        rn_renderer = Gtk.CellRendererText()
+        rn_renderer.set_property("foreground", "#2a5a6a")
+        rn_renderer.set_property("xalign", 1.0)
+        rn_renderer.set_property("xpad", 8)
+        rn_col = Gtk.TreeViewColumn("#", rn_renderer, text=0)
+        rn_col.set_sizing(Gtk.TreeViewColumnSizing.FIXED)
+        rn_col.set_fixed_width(48)
+        self._tree.append_column(rn_col)
+
+        # Data columns A-Z
+        for i, letter in enumerate(COLS):
+            renderer = Gtk.CellRendererText()
+            renderer.set_property("editable", True)
+            renderer.set_property("foreground", "#e0fbfc")
+            renderer.set_property("xpad", 6)
+            renderer.set_property("ellipsize", 3)
+            renderer.connect("editing-started", self._on_editing_started, i)
+            renderer.connect("edited", self._on_cell_edited, i)
+            col = Gtk.TreeViewColumn(letter, renderer, text=i + 1)
+            col.set_sizing(Gtk.TreeViewColumnSizing.FIXED)
+            col.set_fixed_width(90)
+            col.set_resizable(True)
+            self._tree.append_column(col)
+
+        scroll = Gtk.ScrolledWindow()
+        scroll.set_vexpand(True)
+        scroll.set_hexpand(True)
+        scroll.set_child(self._tree)
+
+        # Status bar
+        self._status = Gtk.Label(label="  Ready  ·  Type = to start a formula")
+        self._status.add_css_class("statusbar")
+        self._status.set_xalign(0)
+
+        root = Gtk.Box(orientation=Gtk.Orientation.VERTICAL)
+        root.append(header)
+        root.append(formula_bar)
+        root.append(scroll)
+        root.append(self._status)
+        self.window.set_content(root)
+
+    # ── Cursor & cell selection ───────────────────────────────────────────
+
+    def _on_cursor_changed(self, tree):
+        path, col = tree.get_cursor()
+        if not path:
+            return
+        row = path.get_indices()[0]
+        col_idx = self._tree.get_columns().index(col) - 1 if col else 0
+        col_idx = max(0, col_idx)
+        self._cur_row, self._cur_col = row, col_idx
+        addr = cell_addr(row, col_idx)
+        if self._cell_ref_label:
+            self._cell_ref_label.set_text(addr)
+        raw = self.data.get((row, col_idx), "")
+        if self._formula_entry:
+            self._formula_entry.set_text(raw)
+        self._update_status()
+
+    def _on_editing_started(self, renderer, editable, path_str, col_idx):
+        row = int(path_str)
+        self._cur_row, self._cur_col = row, col_idx
+        raw = self.data.get((row, col_idx), "")
+        if hasattr(editable, "set_text"):
+            editable.set_text(raw)
+        self._editing = True
+
+    def _on_cell_edited(self, renderer, path_str, new_text, col_idx):
+        row = int(path_str)
+        self._editing = False
+        raw = new_text.strip()
+        self.data[(row, col_idx)] = raw
+
+        it = self._store.get_iter(Gtk.TreePath.new_from_string(path_str))
+        display = self.engine.display(row, col_idx)
+        self._store.set_value(it, col_idx + 1, display)
+
+        # Re-evaluate all cells that might reference this one
+        self._refresh_display()
+
+        if self._formula_entry:
+            self._formula_entry.set_text(raw)
+        self._update_status()
+
+    def _formula_committed(self, entry):
+        raw = entry.get_text().strip()
+        row, col = self._cur_row, self._cur_col
+        self.data[(row, col)] = raw
+        self._refresh_display()
+        self._tree.grab_focus()
+
+    def _formula_changed(self, entry):
+        if not self._editing:
+            return
+        raw = entry.get_text()
+        row, col = self._cur_row, self._cur_col
+        self.data[(row, col)] = raw
+
+    def _refresh_display(self):
+        it = self._store.get_iter_first()
+        row = 0
+        while it is not None:
+            for col in range(NUM_COLS):
+                display = self.engine.display(row, col)
+                self._store.set_value(it, col + 1, display)
+            it = self._store.iter_next(it)
+            row += 1
+
+    def _update_status(self):
+        row, col = self._cur_row, self._cur_col
+        raw = self.data.get((row, col), "")
+        result = self.engine.display(row, col)
+        info = f"  {cell_addr(row, col)}"
+        if raw.startswith("="):
+            info += f"  →  {result}"
+        elif raw:
+            info += f"  =  {raw}"
+        self._status.set_text(info + "  ·  Type = to start a formula")
+
+    # ── File I/O ──────────────────────────────────────────────────────────
+
+    def _on_new(self, *_):
+        self.data.clear()
+        self.path = None
+        self.window.set_title("AlexOS Calc")
+        self._refresh_display()
+
+    def _on_open(self, *_):
+        dlg = Gtk.FileChooserDialog(title="Open CSV", transient_for=self.window,
+                                    action=Gtk.FileChooserAction.OPEN)
+        dlg.add_button("Cancel", Gtk.ResponseType.CANCEL)
+        dlg.add_button("Open", Gtk.ResponseType.ACCEPT)
+        ff = Gtk.FileFilter()
+        ff.set_name("CSV files")
+        ff.add_pattern("*.csv")
+        dlg.add_filter(ff)
+        dlg.set_modal(True)
+        dlg.connect("response", lambda d, r: (self._load_csv(Path(d.get_file().get_path()))
+                                               if r == Gtk.ResponseType.ACCEPT and d.get_file()
+                                               else None) or d.destroy())
+        dlg.present()
+
+    def _load_csv(self, path: Path):
+        try:
+            with path.open(newline="", encoding="utf-8") as f:
+                reader = csv.reader(f)
+                self.data.clear()
+                for r, row_data in enumerate(reader):
+                    if r >= NUM_ROWS:
+                        break
+                    for c, val in enumerate(row_data):
+                        if c >= NUM_COLS:
+                            break
+                        if val:
+                            self.data[(r, c)] = val
+            self.path = path
+            self.window.set_title(f"AlexOS Calc — {path.name}")
+            self._refresh_display()
+        except OSError as e:
+            self._status.set_text(f"  Error: {e}")
+
+    def _on_save(self, *_):
+        if self.path:
+            self._write_csv(self.path)
+        else:
+            self._save_as()
+
+    def _save_as(self):
+        dlg = Gtk.FileChooserDialog(title="Save CSV", transient_for=self.window,
+                                    action=Gtk.FileChooserAction.SAVE)
+        dlg.add_button("Cancel", Gtk.ResponseType.CANCEL)
+        dlg.add_button("Save", Gtk.ResponseType.ACCEPT)
+        dlg.set_current_name(self.path.name if self.path else "sheet.csv")
+        dlg.set_modal(True)
+        dlg.connect("response", lambda d, r: (self._write_csv(Path(d.get_file().get_path()))
+                                               if r == Gtk.ResponseType.ACCEPT and d.get_file()
+                                               else None) or d.destroy())
+        dlg.present()
+
+    def _write_csv(self, path: Path):
+        # Find extent of data
+        if not self.data:
+            return
+        max_row = max(r for r, _ in self.data) + 1
+        max_col = max(c for _, c in self.data) + 1
+        try:
+            with path.open("w", newline="", encoding="utf-8") as f:
+                writer = csv.writer(f)
+                for r in range(max_row):
+                    row_data = [self.data.get((r, c), "") for c in range(max_col)]
+                    writer.writerow(row_data)
+            self.path = path
+            self.window.set_title(f"AlexOS Calc — {path.name}")
+            self._status.set_text(f"  Saved to {path.name}")
+        except OSError as e:
+            self._status.set_text(f"  Error: {e}")
+
+
+if __name__ == "__main__":
+    raise SystemExit(CalcApp().run(sys.argv))

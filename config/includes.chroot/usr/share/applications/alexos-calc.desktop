@@ -1,0 +1,12 @@
+[Desktop Entry]
+Version=1.0
+Type=Application
+Name=AlexOS Calc
+Comment=Spreadsheet with formula engine
+Icon=alexos-calc
+Exec=/usr/local/bin/alexos-calc %F
+Terminal=false
+Categories=Office;Spreadsheet;
+MimeType=text/csv;application/vnd.ms-excel;
+Keywords=spreadsheet;calc;csv;formula;table;
+StartupNotify=true
