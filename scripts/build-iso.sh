@@ -775,12 +775,15 @@ configure_permissions() {
     /usr/local/bin/alexos-app-store
     /usr/local/bin/alexos-software-updates
     /usr/local/bin/alexos-studio
+    /usr/local/bin/alexos-terminal-defaults
     /usr/local/bin/alexos-icon-changer
     /usr/local/bin/alexos-write
     /usr/local/bin/alexos-draw
     /usr/local/bin/alexos-files
     /usr/local/bin/alexos-calc
     /usr/local/bin/alexos-welcome
+    /usr/local/bin/pip
+    /usr/local/bin/pip3
     /usr/local/sbin/alexos-app-install
     /usr/local/sbin/alexos-update
   )

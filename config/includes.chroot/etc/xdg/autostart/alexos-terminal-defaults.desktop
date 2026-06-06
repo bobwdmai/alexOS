@@ -1,0 +1,8 @@
+[Desktop Entry]
+Type=Application
+Name=AlexOS Terminal Defaults
+Comment=Apply solid AlexOS terminal profile
+Exec=/usr/local/bin/alexos-terminal-defaults
+Terminal=false
+NoDisplay=true
+X-GNOME-Autostart-enabled=true

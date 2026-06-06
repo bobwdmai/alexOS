@@ -1,0 +1,48 @@
+#!/usr/bin/env bash
+set -Eeuo pipefail
+
+usage_passthrough=0
+case "${1:-}" in
+  ""|-h|--help|--version|help|debug|completion)
+    usage_passthrough=1
+    ;;
+esac
+
+if [[ -n "${VIRTUAL_ENV:-}" && -x "${VIRTUAL_ENV}/bin/python" ]]; then
+  exec "${VIRTUAL_ENV}/bin/python" -m pip "$@"
+fi
+
+if (( usage_passthrough == 1 )); then
+  exec python3 -m pip "$@"
+fi
+
+find_project_venv() {
+  local dir="${PWD}"
+  while [[ "${dir}" != "/" ]]; do
+    if [[ -d "${dir}/.venv" ]]; then
+      printf '%s/.venv\n' "${dir}"
+      return 0
+    fi
+    dir="$(dirname "${dir}")"
+  done
+  return 1
+}
+
+venv_dir="$(find_project_venv || true)"
+if [[ -z "${venv_dir}" ]]; then
+  venv_dir="${PWD}/.venv"
+  printf 'AlexOS pip: creating virtual environment at %s\n' "${venv_dir}" >&2
+  python3 -m venv "${venv_dir}"
+fi
+
+if [[ ! -x "${venv_dir}/bin/python" ]]; then
+  printf 'AlexOS pip: broken virtual environment: %s\n' "${venv_dir}" >&2
+  exit 1
+fi
+
+if ! "${venv_dir}/bin/python" -m pip --version >/dev/null 2>&1; then
+  "${venv_dir}/bin/python" -m ensurepip --upgrade >/dev/null
+fi
+
+printf 'AlexOS pip: using %s\n' "${venv_dir}" >&2
+exec "${venv_dir}/bin/python" -m pip "$@"

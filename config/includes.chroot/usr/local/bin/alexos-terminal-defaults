@@ -1,0 +1,28 @@
+#!/usr/bin/env bash
+set -Eeuo pipefail
+
+if ! command -v gsettings >/dev/null 2>&1; then
+  exit 0
+fi
+
+profile="b1dcc9dd-5262-4d8d-a863-c897e6d979b9c"
+profile_schema="org.gnome.Terminal.Legacy.Profile:/org/gnome/terminal/legacy/profiles:/:${profile}/"
+palette="['#060f1c', '#f87171', '#34d399', '#facc15', '#60a5fa', '#c084fc', '#22d3ee', '#e0fbfc', '#4a7a8f', '#fca5a5', '#86efac', '#fde68a', '#93c5fd', '#d8b4fe', '#67e8f9', '#ffffff']"
+
+gsettings set org.gnome.Terminal.ProfilesList default "${profile}" || true
+gsettings set org.gnome.Terminal.ProfilesList list "['${profile}']" || true
+gsettings set "${profile_schema}" visible-name "AlexOS" || true
+gsettings set "${profile_schema}" use-theme-colors false || true
+gsettings set "${profile_schema}" foreground-color "#e0fbfc" || true
+gsettings set "${profile_schema}" background-color "#060f1c" || true
+gsettings set "${profile_schema}" bold-color-same-as-fg true || true
+gsettings set "${profile_schema}" cursor-colors-set true || true
+gsettings set "${profile_schema}" cursor-foreground-color "#060f1c" || true
+gsettings set "${profile_schema}" cursor-background-color "#00b4d8" || true
+gsettings set "${profile_schema}" highlight-colors-set true || true
+gsettings set "${profile_schema}" highlight-foreground-color "#e0fbfc" || true
+gsettings set "${profile_schema}" highlight-background-color "#005e80" || true
+gsettings set "${profile_schema}" use-transparent-background false || true
+gsettings set "${profile_schema}" use-theme-transparency false || true
+gsettings set "${profile_schema}" background-transparency-percent 0 || true
+gsettings set "${profile_schema}" palette "${palette}" || true

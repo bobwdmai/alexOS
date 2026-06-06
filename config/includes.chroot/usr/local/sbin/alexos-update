@@ -79,8 +79,11 @@ fix_overlay_permissions() {
     /usr/local/bin/alexos-setup-wizard
     /usr/local/bin/alexos-software-updates
     /usr/local/bin/alexos-studio
+    /usr/local/bin/alexos-terminal-defaults
     /usr/local/bin/alexos-welcome
     /usr/local/bin/alexos-write
+    /usr/local/bin/pip
+    /usr/local/bin/pip3
     /usr/local/sbin/alexos-app-install
     /usr/local/sbin/alexos-update
   )
@@ -93,6 +96,33 @@ fix_overlay_permissions() {
   done
 
   find /usr/share/applications -maxdepth 1 -name 'alexos-*.desktop' -exec chmod 0644 {} + 2>/dev/null || true
+  find /etc/xdg/autostart -maxdepth 1 -name 'alexos-*.desktop' -exec chmod 0644 {} + 2>/dev/null || true
+}
+
+ensure_runtime_packages() {
+  local packages=(python3-pip python3-venv)
+  local missing=()
+  local package
+
+  if ! command -v apt-get >/dev/null 2>&1 || ! command -v dpkg-query >/dev/null 2>&1; then
+    return
+  fi
+
+  for package in "${packages[@]}"; do
+    if ! dpkg-query -W -f='${Status}' "${package}" 2>/dev/null | grep -q 'install ok installed'; then
+      missing+=("${package}")
+    fi
+  done
+
+  if ((${#missing[@]} == 0)); then
+    return
+  fi
+
+  log "Installing runtime packages: ${missing[*]}"
+  export DEBIAN_FRONTEND=noninteractive
+  if ! apt-get update || ! apt-get install -y "${missing[@]}"; then
+    log "Could not install runtime packages automatically. Install manually: apt-get install ${missing[*]}"
+  fi
 }
 
 latest_commit() {
@@ -169,6 +199,7 @@ apply_overlay() {
   log "Applying AlexOS overlay"
   cp -a "${overlay_dir}/." /
   fix_overlay_permissions
+  ensure_runtime_packages
 
   install -d -m 0755 /etc/alexos
   printf '%s\n' "${target_commit}" > "${CURRENT_COMMIT_FILE}"
