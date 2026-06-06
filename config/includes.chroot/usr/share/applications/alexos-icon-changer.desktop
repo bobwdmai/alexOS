@@ -1,0 +1,11 @@
+[Desktop Entry]
+Version=1.0
+Type=Application
+Name=Icon Changer
+Comment=Auto-generate blueprint icons for all installed apps
+Icon=alexos-icon-changer
+Exec=/usr/local/bin/alexos-icon-changer
+Terminal=false
+Categories=Settings;DesktopSettings;
+Keywords=icon;theme;blueprint;style;
+StartupNotify=true

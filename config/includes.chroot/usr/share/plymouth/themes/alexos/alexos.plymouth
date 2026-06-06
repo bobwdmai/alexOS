@@ -1,0 +1,8 @@
+[Plymouth Theme]
+Name=AlexOS
+Description=AlexOS dark blueprint boot splash
+ModuleName=script
+
+[script]
+ImageDir=/usr/share/plymouth/themes/alexos
+ScriptFile=/usr/share/plymouth/themes/alexos/alexos.script

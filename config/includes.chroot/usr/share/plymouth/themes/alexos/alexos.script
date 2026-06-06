@@ -1,0 +1,95 @@
+# AlexOS Plymouth boot theme — blueprint dark
+
+# Background: #0a1929 -> #050d17
+Window.SetBackgroundTopColor(0.039, 0.098, 0.161);
+Window.SetBackgroundBottomColor(0.020, 0.051, 0.090);
+
+cx = Window.GetWidth() / 2;
+cy = Window.GetHeight() / 2;
+
+# ── Title ──────────────────────────────────────────────────────────────
+title_img = Image.Text("ALEXOS", 0.878, 0.984, 0.988, 1, "Sans Bold 52");
+title_spr = Sprite(title_img);
+title_spr.SetX(cx - title_img.GetWidth() / 2);
+title_spr.SetY(cy - 90);
+title_spr.SetZ(10);
+
+# ── Subtitle ────────────────────────────────────────────────────────────
+sub_img = Image.Text("ARCHITECT  WORKSTATION", 0.0, 0.706, 0.847, 1, "Sans 18");
+sub_spr = Sprite(sub_img);
+sub_spr.SetX(cx - sub_img.GetWidth() / 2);
+sub_spr.SetY(cy - 36);
+sub_spr.SetZ(10);
+
+# ── Thin separator line (text of dashes) ───────────────────────────────
+sep_img = Image.Text("────────────────────────────────────────", 0.0, 0.420, 0.510, 1, "Monospace 10");
+sep_spr = Sprite(sep_img);
+sep_spr.SetX(cx - sep_img.GetWidth() / 2);
+sep_spr.SetY(cy - 4);
+sep_spr.SetZ(10);
+
+# ── Spinner ─────────────────────────────────────────────────────────────
+spin_frame = 0;
+tick = 0;
+
+fun spin_char(f) {
+    f = Math.Int(f % 8);
+    if (f == 0) return "  |  ";
+    if (f == 1) return "  /  ";
+    if (f == 2) return "  —  ";
+    if (f == 3) return "  \\  ";
+    if (f == 4) return "  |  ";
+    if (f == 5) return "  /  ";
+    if (f == 6) return "  —  ";
+    return "  \\  ";
+}
+
+spin_img = Image.Text(spin_char(0), 0.0, 0.706, 0.847, 1, "Monospace 22");
+spin_spr = Sprite(spin_img);
+spin_spr.SetX(cx - spin_img.GetWidth() / 2);
+spin_spr.SetY(cy + 24);
+spin_spr.SetZ(10);
+
+fun refresh_callback() {
+    tick = tick + 1;
+    if (tick >= 7) {
+        tick = 0;
+        spin_frame = spin_frame + 1;
+        new_img = Image.Text(spin_char(spin_frame), 0.0, 0.706, 0.847, 1, "Monospace 22");
+        spin_spr.SetImage(new_img);
+    }
+}
+Plymouth.SetRefreshFunction(refresh_callback);
+
+# ── Progress bar ────────────────────────────────────────────────────────
+has_progress = 0;
+progress_spr = 0;
+
+fun boot_progress(progress, duration) {
+    filled = Math.Int(progress * 36);
+    bar = "[";
+    for (i = 0; i < filled; i = i + 1) {
+        bar = bar + "=";
+    }
+    for (i = filled; i < 36; i = i + 1) {
+        bar = bar + " ";
+    }
+    bar = bar + "]";
+
+    if (has_progress) {
+        progress_spr.SetOpacity(0);
+    }
+    has_progress = 1;
+
+    bar_img = Image.Text(bar, 0.0, 0.706, 0.847, 1, "Monospace 12");
+    progress_spr = Sprite(bar_img);
+    progress_spr.SetX(cx - bar_img.GetWidth() / 2);
+    progress_spr.SetY(cy + 64);
+    progress_spr.SetZ(10);
+}
+Plymouth.SetBootProgressFunction(boot_progress);
+
+# ── Quiet message handler (hides systemd noise) ─────────────────────────
+fun message_callback(text) {
+}
+Plymouth.SetMessageFunction(message_callback);

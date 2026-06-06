@@ -1,0 +1,543 @@
+#!/usr/bin/env python3
+"""AlexOS Icon Changer — auto-generate blueprint icons for all installed apps."""
+
+import configparser
+import hashlib
+import os
+import subprocess
+import sys
+import threading
+from pathlib import Path
+
+import gi
+
+gi.require_version("Gtk", "4.0")
+gi.require_version("Adw", "1")
+from gi.repository import Adw, GLib, Gtk
+
+SYSTEM_THEME = "blueprint-WhiteSur-dark-GNOME"
+SYSTEM_ICON_DIR = Path(f"/usr/share/icons/{SYSTEM_THEME}/scalable/apps")
+USER_ICON_DIR = Path.home() / f".local/share/icons/{SYSTEM_THEME}/scalable/apps"
+DESKTOP_DIRS = [Path("/usr/share/applications"), Path.home() / ".local/share/applications"]
+
+DEFAULT_ACCENT = "#00b4d8"
+
+# Cycling palette for auto-assigned accent colors
+PALETTE = [
+    "#00b4d8", "#60a5fa", "#34d399", "#f59e0b",
+    "#f87171", "#c084fc", "#fb923c", "#22d3ee",
+    "#4ade80", "#a78bfa", "#facc15", "#38bdf8",
+]
+
+EXCLUDE_ICONS = {
+    "application-x-executable", "system-run", "application-default-icon",
+    "", "applications-other",
+}
+
+
+def make_blueprint_svg(initials: str, accent: str = DEFAULT_ACCENT) -> str:
+    fs = "34" if len(initials) <= 2 else "26"
+    return f"""<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" width="128" height="128" viewBox="0 0 128 128" overflow="hidden">
+  <defs>
+    <linearGradient id="edge" x1="18" y1="10" x2="112" y2="120" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#6ee7ff"/>
+      <stop offset="0.16" stop-color="#1f4f63"/>
+      <stop offset="0.62" stop-color="#071827"/>
+      <stop offset="1" stop-color="#020814"/>
+    </linearGradient>
+    <linearGradient id="face" x1="22" y1="13" x2="108" y2="111" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#2b5b6f"/>
+      <stop offset="0.28" stop-color="#143647"/>
+      <stop offset="0.68" stop-color="#0a2130"/>
+      <stop offset="1" stop-color="#06101b"/>
+    </linearGradient>
+    <linearGradient id="rim" x1="20" y1="18" x2="108" y2="108" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#e8fbff"/>
+      <stop offset="0.18" stop-color="#72e6ff"/>
+      <stop offset="0.68" stop-color="#1c5264"/>
+      <stop offset="1" stop-color="#06111d"/>
+    </linearGradient>
+    <radialGradient id="glow" cx="34" cy="28" r="72" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="{accent}" stop-opacity="0.46"/>
+      <stop offset="0.45" stop-color="{accent}" stop-opacity="0.16"/>
+      <stop offset="1" stop-color="{accent}" stop-opacity="0"/>
+    </radialGradient>
+    <linearGradient id="shine" x1="24" y1="16" x2="86" y2="74" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#ffffff" stop-opacity="0.36"/>
+      <stop offset="0.42" stop-color="#ffffff" stop-opacity="0.08"/>
+      <stop offset="1" stop-color="#ffffff" stop-opacity="0"/>
+    </linearGradient>
+    <filter id="plateShadow" x="-28%" y="-26%" width="156%" height="166%">
+      <feDropShadow dx="0" dy="15" stdDeviation="9" flood-color="#000814" flood-opacity="0.48"/>
+      <feDropShadow dx="0" dy="2" stdDeviation="1.5" flood-color="#b7f5ff" flood-opacity="0.18"/>
+    </filter>
+    <filter id="textGlow" x="-20%" y="-20%" width="140%" height="140%">
+      <feDropShadow dx="2" dy="4" stdDeviation="3" flood-color="#000814" flood-opacity="0.72"/>
+    </filter>
+  </defs>
+  <ellipse cx="64" cy="116" rx="40" ry="8" fill="#000814" opacity="0.38"/>
+  <rect x="12" y="16" width="108" height="106" rx="27" fill="#020814" opacity="0.68"/>
+  <rect x="9" y="9" width="110" height="110" rx="26" fill="url(#edge)" filter="url(#plateShadow)"/>
+  <rect x="11" y="7" width="106" height="106" rx="24" fill="url(#face)"/>
+  <rect x="11" y="7" width="106" height="106" rx="24" fill="url(#glow)"/>
+  <path d="M25 20c13-6 63-6 78 0c-11 12-67 13-78 0z" fill="url(#shine)" opacity="0.72"/>
+  <path d="M28 22v84M48 22v84M68 22v84M88 22v84M22 40h84M22 60h84M22 80h84M22 100h84"
+        fill="none" stroke="#5a8294" stroke-width="1.2" opacity="0.38"/>
+  <rect x="20" y="20" width="88" height="88" rx="20" fill="none" stroke="url(#rim)" stroke-width="2.8" opacity="0.96"/>
+  <path d="M24 23h80" fill="none" stroke="#e8fbff" stroke-width="2" stroke-linecap="round" opacity="0.22"/>
+  <text x="68" y="76" text-anchor="middle" dominant-baseline="middle"
+        font-family="Cantarell,sans-serif" font-weight="700" font-size="{fs}"
+        fill="#000814" opacity="0.55">{initials}</text>
+  <text x="64" y="72" text-anchor="middle" dominant-baseline="middle"
+        font-family="Cantarell,sans-serif" font-weight="700" font-size="{fs}"
+        fill="{accent}" filter="url(#textGlow)">{initials}</text>
+  <text x="63" y="71" text-anchor="middle" dominant-baseline="middle"
+        font-family="Cantarell,sans-serif" font-weight="700" font-size="{fs}"
+        fill="#f7fdff" opacity="0.50">{initials}</text>
+</svg>"""
+
+
+def app_initials(name: str) -> str:
+    words = [w for w in name.split() if w]
+    if not words:
+        return "?"
+    if len(words) == 1:
+        return words[0][:2].upper()
+    return (words[0][0] + words[1][0]).upper()
+
+
+def icon_in_system(icon: str) -> bool:
+    return (SYSTEM_ICON_DIR / f"{icon}.svg").exists()
+
+
+def icon_in_user(icon: str) -> bool:
+    return (USER_ICON_DIR / f"{icon}.svg").exists()
+
+
+def scan_apps():
+    """Return list of (name, icon_name) from .desktop files."""
+    apps = {}
+    for d in DESKTOP_DIRS:
+        if not d.exists():
+            continue
+        for f in sorted(d.glob("*.desktop")):
+            cp = configparser.ConfigParser(strict=False, interpolation=None)
+            try:
+                cp.read(f, encoding="utf-8")
+            except Exception:
+                continue
+            if "Desktop Entry" not in cp:
+                continue
+            entry = cp["Desktop Entry"]
+            if entry.get("NoDisplay", "false").lower() == "true":
+                continue
+            if entry.get("Hidden", "false").lower() == "true":
+                continue
+            name = entry.get("Name", f.stem)
+            icon = entry.get("Icon", "").strip()
+            if icon and icon not in EXCLUDE_ICONS and not icon.startswith("/"):
+                apps[icon] = name
+    return sorted(apps.items(), key=lambda x: x[1].lower())
+
+
+def refresh_cache():
+    user_theme = Path.home() / f".local/share/icons/{SYSTEM_THEME}"
+    if user_theme.exists():
+        subprocess.run(
+            ["gtk-update-icon-cache", "-f", "-t", str(user_theme)],
+            capture_output=True,
+        )
+
+
+APP_CSS = b"""
+window {
+  background: linear-gradient(160deg, #0a1929 0%, #0d1b2a 50%, #071421 100%);
+}
+.page-box {
+  background: transparent;
+  color: #e0fbfc;
+}
+.app-title {
+  font-size: 26px;
+  font-weight: 900;
+  color: #e0fbfc;
+  letter-spacing: 2px;
+}
+.app-subtitle {
+  font-size: 14px;
+  color: #7dd3fc;
+}
+.section-label {
+  font-size: 13px;
+  font-weight: 700;
+  color: #5a8294;
+  letter-spacing: 2px;
+}
+.status-bar {
+  font-size: 14px;
+  color: #b9c7d6;
+}
+.status-bar.ok {
+  color: #7ee787;
+}
+.status-bar.busy {
+  color: #fbbf24;
+}
+.app-row {
+  border-radius: 8px;
+  padding: 6px 10px;
+}
+.app-row:hover {
+  background: rgba(0, 180, 216, 0.06);
+}
+.has-icon {
+  color: #34d399;
+  font-size: 13px;
+}
+.no-icon {
+  color: #94a3b8;
+  font-size: 13px;
+}
+.color-swatch {
+  border-radius: 6px;
+  min-width: 28px;
+  min-height: 28px;
+  border: 2px solid rgba(255,255,255,0.18);
+}
+button {
+  border-radius: 8px;
+  font-weight: 700;
+  min-height: 38px;
+  padding-left: 16px;
+  padding-right: 16px;
+}
+button.suggested-action {
+  background: linear-gradient(135deg, #006891, #00b4d8);
+  color: #ffffff;
+  border: 1px solid rgba(0, 180, 216, 0.3);
+  box-shadow: 0 2px 14px rgba(0, 180, 216, 0.22);
+}
+button.suggested-action:hover {
+  background: linear-gradient(135deg, #0079a8, #00ccf5);
+  box-shadow: 0 2px 22px rgba(0, 180, 216, 0.4);
+}
+button.destructive-action {
+  background: rgba(239, 68, 68, 0.14);
+  color: #fca5a5;
+  border: 1px solid rgba(239, 68, 68, 0.28);
+}
+"""
+
+
+class IconChangerApp(Adw.Application):
+    def __init__(self):
+        super().__init__(application_id="os.alex.iconchanger")
+        self.window = None
+        self.apps = []
+        self.accent = DEFAULT_ACCENT
+        self.busy = False
+
+    def do_activate(self):
+        provider = Gtk.CssProvider()
+        provider.load_from_data(APP_CSS)
+        from gi.repository import Gdk
+
+        display = Gdk.Display.get_default()
+        if display:
+            Gtk.StyleContext.add_provider_for_display(
+                display, provider, Gtk.STYLE_PROVIDER_PRIORITY_APPLICATION
+            )
+
+        self.window = Adw.ApplicationWindow(application=self)
+        self.window.set_title("AlexOS Icon Changer")
+        self.window.set_default_size(680, 600)
+
+        header = Adw.HeaderBar()
+        header.set_show_end_title_buttons(True)
+
+        root = Gtk.Box(orientation=Gtk.Orientation.VERTICAL)
+        root.append(header)
+        root.append(self._build_page())
+        self.window.set_content(root)
+        self.window.present()
+
+        self._reload_apps()
+
+    # ── Page layout ────────────────────────────────────────────────────
+
+    def _build_page(self):
+        outer = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=0)
+        outer.add_css_class("page-box")
+
+        # Hero strip
+        hero = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=16)
+        hero.set_margin_top(20)
+        hero.set_margin_bottom(16)
+        hero.set_margin_start(24)
+        hero.set_margin_end(24)
+
+        logo = Gtk.Image.new_from_icon_name("alexos-icon-changer")
+        logo.set_pixel_size(56)
+        hero.append(logo)
+
+        text_box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=3)
+        t = Gtk.Label(label="Icon Changer")
+        t.add_css_class("app-title")
+        t.set_xalign(0)
+        s = Gtk.Label(label="Auto-generate blueprint icons for every installed app")
+        s.add_css_class("app-subtitle")
+        s.set_xalign(0)
+        s.set_wrap(True)
+        text_box.append(t)
+        text_box.append(s)
+        hero.append(text_box)
+        outer.append(hero)
+
+        # Controls row
+        ctrl = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=10)
+        ctrl.set_margin_start(24)
+        ctrl.set_margin_end(24)
+        ctrl.set_margin_bottom(14)
+
+        self.gen_btn = Gtk.Button(label="Auto-Generate Missing Icons")
+        self.gen_btn.add_css_class("suggested-action")
+        self.gen_btn.connect("clicked", self._on_generate)
+        ctrl.append(self.gen_btn)
+
+        color_btn = Gtk.Button(label="Change Accent Color")
+        color_btn.connect("clicked", self._on_pick_color)
+        ctrl.append(color_btn)
+
+        self.swatch = Gtk.DrawingArea()
+        self.swatch.set_size_request(28, 28)
+        self.swatch.add_css_class("color-swatch")
+        self.swatch.set_draw_func(self._draw_swatch)
+        ctrl.append(self.swatch)
+
+        spacer = Gtk.Box()
+        spacer.set_hexpand(True)
+        ctrl.append(spacer)
+
+        reset_btn = Gtk.Button(label="Reset to Default")
+        reset_btn.add_css_class("destructive-action")
+        reset_btn.connect("clicked", self._on_reset)
+        ctrl.append(reset_btn)
+
+        outer.append(ctrl)
+
+        # Status bar
+        self.status_label = Gtk.Label(label="Scanning apps…")
+        self.status_label.add_css_class("status-bar")
+        self.status_label.set_xalign(0)
+        self.status_label.set_margin_start(24)
+        self.status_label.set_margin_end(24)
+        self.status_label.set_margin_bottom(10)
+        outer.append(self.status_label)
+
+        # App list
+        sep = Gtk.Separator(orientation=Gtk.Orientation.HORIZONTAL)
+        outer.append(sep)
+
+        scroller = Gtk.ScrolledWindow()
+        scroller.set_vexpand(True)
+        scroller.set_policy(Gtk.PolicyType.NEVER, Gtk.PolicyType.AUTOMATIC)
+
+        self.list_box = Gtk.ListBox()
+        self.list_box.set_selection_mode(Gtk.SelectionMode.NONE)
+        self.list_box.set_margin_top(8)
+        self.list_box.set_margin_bottom(8)
+        self.list_box.set_margin_start(12)
+        self.list_box.set_margin_end(12)
+
+        scroller.set_child(self.list_box)
+        outer.append(scroller)
+
+        return outer
+
+    # ── Drawing ─────────────────────────────────────────────────────────
+
+    def _draw_swatch(self, area, cr, w, h):
+        try:
+            r = int(self.accent[1:3], 16) / 255
+            g = int(self.accent[3:5], 16) / 255
+            b = int(self.accent[5:7], 16) / 255
+        except Exception:
+            r, g, b = 0, 0.706, 0.847
+        cr.set_source_rgb(r, g, b)
+        cr.arc(6, 6, 6, 3.14159, 1.5 * 3.14159)
+        cr.arc(w - 6, 6, 6, 1.5 * 3.14159, 0)
+        cr.arc(w - 6, h - 6, 6, 0, 0.5 * 3.14159)
+        cr.arc(6, h - 6, 6, 0.5 * 3.14159, 3.14159)
+        cr.close_path()
+        cr.fill()
+
+    # ── App list rendering ───────────────────────────────────────────────
+
+    def _reload_apps(self):
+        def worker():
+            apps = scan_apps()
+            GLib.idle_add(self._populate_list, apps)
+
+        threading.Thread(target=worker, daemon=True).start()
+
+    def _populate_list(self, apps):
+        self.apps = apps
+        while True:
+            row = self.list_box.get_row_at_index(0)
+            if row is None:
+                break
+            self.list_box.remove(row)
+
+        has_custom = sum(1 for icon, _ in apps if icon_in_system(icon) or icon_in_user(icon))
+        missing = len(apps) - has_custom
+        self.status_label.set_text(
+            f"{len(apps)} apps  •  {has_custom} have blueprint icons  •  {missing} will be auto-generated"
+        )
+        if missing == 0:
+            self.status_label.remove_css_class("busy")
+            self.status_label.add_css_class("ok")
+        else:
+            self.status_label.remove_css_class("ok")
+            self.status_label.add_css_class("busy")
+
+        for icon, name in apps:
+            row = Gtk.ListBoxRow()
+            row.add_css_class("app-row")
+
+            box = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=10)
+            box.set_margin_top(4)
+            box.set_margin_bottom(4)
+
+            img = Gtk.Image.new_from_icon_name(icon)
+            img.set_pixel_size(28)
+            box.append(img)
+
+            lbl = Gtk.Label(label=name)
+            lbl.set_xalign(0)
+            lbl.set_hexpand(True)
+            lbl.set_ellipsize(3)  # PANGO_ELLIPSIZE_END
+            box.append(lbl)
+
+            icon_lbl = Gtk.Label()
+            if icon_in_system(icon) or icon_in_user(icon):
+                icon_lbl.set_text("● Blueprint")
+                icon_lbl.add_css_class("has-icon")
+            else:
+                icon_lbl.set_text("○ Auto-gen")
+                icon_lbl.add_css_class("no-icon")
+            box.append(icon_lbl)
+
+            row.set_child(box)
+            self.list_box.append(row)
+
+    # ── Actions ─────────────────────────────────────────────────────────
+
+    def _on_generate(self, _btn):
+        if self.busy:
+            return
+        self.busy = True
+        self.gen_btn.set_sensitive(False)
+        self.status_label.remove_css_class("ok")
+        self.status_label.add_css_class("busy")
+        self.status_label.set_text("Generating icons…")
+
+        accent = self.accent
+
+        def worker():
+            USER_ICON_DIR.mkdir(parents=True, exist_ok=True)
+            count = 0
+            for i, (icon, name) in enumerate(self.apps):
+                if icon_in_system(icon) or icon_in_user(icon):
+                    continue
+                initials = app_initials(name)
+                color = PALETTE[int(hashlib.md5(icon.encode()).hexdigest(), 16) % len(PALETTE)]
+                svg = make_blueprint_svg(initials, color)
+                out = USER_ICON_DIR / f"{icon}.svg"
+                out.write_text(svg, encoding="utf-8")
+                count += 1
+                GLib.idle_add(
+                    self.status_label.set_text,
+                    f"Generated {count} icons… ({i + 1}/{len(self.apps)})",
+                )
+
+            refresh_cache()
+            GLib.idle_add(self._finish_generate, count)
+
+        threading.Thread(target=worker, daemon=True).start()
+
+    def _finish_generate(self, count):
+        self.busy = False
+        self.gen_btn.set_sensitive(True)
+        self.status_label.remove_css_class("busy")
+        self.status_label.add_css_class("ok")
+        self.status_label.set_text(f"Done! Generated {count} new icons. Log out and back in to see them.")
+        self._reload_apps()
+
+    def _on_pick_color(self, _btn):
+        dialog = Gtk.ColorChooserDialog(title="Pick Accent Color", transient_for=self.window, modal=True)
+        dialog.set_use_alpha(False)
+        try:
+            from gi.repository import Gdk
+            rgba = Gdk.RGBA()
+            rgba.parse(self.accent)
+            dialog.set_rgba(rgba)
+        except Exception:
+            pass
+
+        def on_response(dlg, response):
+            if response == Gtk.ResponseType.OK:
+                rgba = dlg.get_rgba()
+                self.accent = "#{:02x}{:02x}{:02x}".format(
+                    int(rgba.red * 255), int(rgba.green * 255), int(rgba.blue * 255)
+                )
+                self.swatch.queue_draw()
+                self._apply_accent_to_all()
+            dlg.destroy()
+
+        dialog.connect("response", on_response)
+        dialog.present()
+
+    def _apply_accent_to_all(self):
+        if self.busy:
+            return
+        self.busy = True
+        self.gen_btn.set_sensitive(False)
+        self.status_label.set_text(f"Applying accent color {self.accent} to all icons…")
+        accent = self.accent
+
+        def worker():
+            USER_ICON_DIR.mkdir(parents=True, exist_ok=True)
+            count = 0
+            for icon, name in self.apps:
+                initials = app_initials(name)
+                svg = make_blueprint_svg(initials, accent)
+                out = USER_ICON_DIR / f"{icon}.svg"
+                out.write_text(svg, encoding="utf-8")
+                count += 1
+
+            refresh_cache()
+            GLib.idle_add(self._finish_generate, count)
+
+        threading.Thread(target=worker, daemon=True).start()
+
+    def _on_reset(self, _btn):
+        if USER_ICON_DIR.exists():
+            import shutil
+            shutil.rmtree(str(USER_ICON_DIR), ignore_errors=True)
+        refresh_cache()
+        self.accent = DEFAULT_ACCENT
+        self.swatch.queue_draw()
+        self.status_label.remove_css_class("ok")
+        self.status_label.remove_css_class("busy")
+        self.status_label.set_text("Reset to default. Log out and back in to see changes.")
+        self._reload_apps()
+
+
+def main():
+    app = IconChangerApp()
+    return app.run(sys.argv)
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

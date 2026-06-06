@@ -26,6 +26,7 @@ TOOLS = [
     ("org.gnome.TextEditor", "Notes", "org.gnome.TextEditor", [["gnome-text-editor"], ["gedit"]]),
     ("org.gnome.Terminal", "Terminal", "org.gnome.Terminal", [["gnome-terminal"], ["kgx"], ["xterm"]]),
     ("alexos-software-updates", "Updates", "system-software-update", [["/usr/local/bin/alexos-software-updates"]]),
+    ("alexos-icon-changer", "Icons", "alexos-icon-changer", [["/usr/local/bin/alexos-icon-changer"]]),
 ]
 
 

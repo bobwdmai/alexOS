@@ -40,6 +40,126 @@ rm -f /etc/sudoers.d/alexos-live
 ( sleep 3; systemctl restart gdm3 || systemctl restart gdm || true ) >/dev/null 2>&1 &
 """
 
+APP_CSS = b"""
+window.setup-window {
+  background: linear-gradient(160deg, #080f1c 0%, #0d1b2a 45%, #071421 100%);
+}
+.setup-page {
+  background: transparent;
+  color: #e0fbfc;
+}
+
+/* ── Header strip ─────────────────────────────────────────────────────── */
+.setup-header {
+  background: linear-gradient(180deg, rgba(0,180,216,0.10) 0%, transparent 100%);
+  border-bottom: 1px solid rgba(0,180,216,0.14);
+}
+
+/* ── Typography ───────────────────────────────────────────────────────── */
+.brand-word {
+  font-size: 34px;
+  font-weight: 900;
+  color: #e0fbfc;
+  letter-spacing: 6px;
+}
+.page-title {
+  font-size: 26px;
+  font-weight: 800;
+  color: #e0fbfc;
+}
+.page-subtitle {
+  font-size: 15px;
+  color: #7dd3fc;
+}
+.field-label {
+  font-size: 13px;
+  font-weight: 700;
+  color: #5a8ea4;
+  letter-spacing: 1px;
+}
+.error-label {
+  color: #fca5a5;
+  font-size: 14px;
+  min-height: 32px;
+}
+.success-icon {
+  color: #34d399;
+}
+.dim-note {
+  color: #4a7a8f;
+  font-size: 14px;
+}
+
+/* ── Inputs ───────────────────────────────────────────────────────────── */
+entry {
+  background: rgba(0,180,216,0.06);
+  border: 1px solid rgba(0,180,216,0.18);
+  color: #e0fbfc;
+  border-radius: 8px;
+  min-height: 44px;
+  font-size: 15px;
+  padding-left: 12px;
+}
+entry:focus {
+  border-color: rgba(0,180,216,0.52);
+  box-shadow: 0 0 0 2px rgba(0,180,216,0.10);
+}
+entry text {
+  color: #e0fbfc;
+}
+entry placeholder {
+  color: #3a6070;
+}
+
+/* ── Checkbutton ──────────────────────────────────────────────────────── */
+checkbutton {
+  color: #94c7d8;
+  font-size: 14px;
+}
+
+/* ── Buttons ──────────────────────────────────────────────────────────── */
+button {
+  border-radius: 8px;
+  font-weight: 700;
+  min-height: 44px;
+  padding-left: 22px;
+  padding-right: 22px;
+}
+button.suggested-action {
+  background: linear-gradient(135deg, #005e80 0%, #00b4d8 100%);
+  color: #ffffff;
+  border: 1px solid rgba(0,180,216,0.28);
+  box-shadow: 0 2px 18px rgba(0,180,216,0.22);
+}
+button.suggested-action:hover {
+  background: linear-gradient(135deg, #0076a0 0%, #00cef5 100%);
+  box-shadow: 0 4px 26px rgba(0,180,216,0.38);
+}
+button.suggested-action:disabled {
+  background: rgba(0,100,130,0.28);
+  color: rgba(255,255,255,0.38);
+  box-shadow: none;
+}
+
+/* ── Step dots ────────────────────────────────────────────────────────── */
+.step-dot {
+  min-width: 7px;
+  min-height: 7px;
+  border-radius: 4px;
+  background: rgba(0,180,216,0.20);
+  margin-left: 4px;
+  margin-right: 4px;
+}
+.step-dot-active {
+  min-width: 20px;
+  min-height: 7px;
+  border-radius: 4px;
+  background: #00b4d8;
+  margin-left: 4px;
+  margin-right: 4px;
+}
+"""
+
 
 def take_lock():
     lock_file = open(LOCK_PATH, "w", encoding="utf-8")
@@ -75,72 +195,66 @@ class SetupWizard(Adw.Application):
         super().__init__(application_id="os.alex.setup")
         self.window = None
         self.countdown = 3
+        self._step_dots = []
+        self._current_step = 0
 
     def do_activate(self):
-        self.install_css()
+        self._install_css()
 
         self.window = Adw.ApplicationWindow(application=self)
         self.window.set_title("Set Up AlexOS")
-        self.window.set_default_size(520, 560)
+        self.window.set_default_size(540, 620)
         self.window.set_resizable(False)
+        self.window.add_css_class("setup-window")
 
+        outer = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=0)
+
+        # Header: brand + logo
+        header = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=10)
+        header.add_css_class("setup-header")
+        header.set_margin_top(28)
+        header.set_margin_bottom(20)
+
+        logo = self._make_logo()
+        logo.set_halign(Gtk.Align.CENTER)
+        header.append(logo)
+
+        brand = Gtk.Label(label="ALEXOS")
+        brand.add_css_class("brand-word")
+        brand.set_halign(Gtk.Align.CENTER)
+        header.append(brand)
+
+        outer.append(header)
+
+        # Page stack
         self.stack = Gtk.Stack()
         self.stack.set_transition_type(Gtk.StackTransitionType.SLIDE_LEFT_RIGHT)
-        self.stack.set_transition_duration(260)
-        self.stack.add_named(self.welcome_page(), "welcome")
-        self.stack.add_named(self.account_page(), "account")
-        self.stack.add_named(self.success_page(), "success")
+        self.stack.set_transition_duration(300)
+        self.stack.set_vexpand(True)
+        self.stack.add_named(self._welcome_page(), "welcome")
+        self.stack.add_named(self._account_page(), "account")
+        self.stack.add_named(self._success_page(), "success")
+        outer.append(self.stack)
 
-        self.window.set_content(self.stack)
+        # Step dots
+        dot_row = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=0)
+        dot_row.set_halign(Gtk.Align.CENTER)
+        dot_row.set_margin_top(14)
+        dot_row.set_margin_bottom(20)
+
+        for i in range(3):
+            d = Gtk.Box()
+            d.add_css_class("step-dot-active" if i == 0 else "step-dot")
+            self._step_dots.append(d)
+            dot_row.append(d)
+
+        outer.append(dot_row)
+        self.window.set_content(outer)
         self.window.present()
 
-    def install_css(self):
-        css = b"""
-        window {
-          background: #101923;
-        }
-        .setup-page {
-          background: #101923;
-          color: #f7fbff;
-        }
-        .title {
-          font-size: 28px;
-          font-weight: 700;
-        }
-        .subtitle {
-          color: #b9c7d6;
-          font-size: 16px;
-        }
-        .field-label {
-          font-size: 15px;
-          font-weight: 700;
-        }
-        .logo-word {
-          color: #e0fbfc;
-          font-size: 32px;
-          font-weight: 700;
-        }
-        .error-label {
-          color: #ffb4ab;
-          min-height: 36px;
-          font-size: 15px;
-        }
-        .success-icon {
-          color: #7ee787;
-          font-size: 64px;
-        }
-        entry {
-          min-height: 42px;
-          font-size: 16px;
-        }
-        button {
-          min-height: 42px;
-          padding-left: 18px;
-          padding-right: 18px;
-        }
-        """
+    def _install_css(self):
         provider = Gtk.CssProvider()
-        provider.load_from_data(css)
+        provider.load_from_data(APP_CSS)
         display = Gdk.Display.get_default()
         if display is not None:
             Gtk.StyleContext.add_provider_for_display(
@@ -149,102 +263,123 @@ class SetupWizard(Adw.Application):
                 Gtk.STYLE_PROVIDER_PRIORITY_APPLICATION,
             )
 
-    def page_shell(self):
-        clamp = Adw.Clamp()
-        clamp.set_maximum_size(460)
-        clamp.set_tightening_threshold(360)
+    def _set_step(self, step: int):
+        self._current_step = step
+        for i, dot in enumerate(self._step_dots):
+            dot.remove_css_class("step-dot")
+            dot.remove_css_class("step-dot-active")
+            dot.add_css_class("step-dot-active" if i == step else "step-dot")
 
-        box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=16)
+    def _make_logo(self):
+        display = Gdk.Display.get_default()
+        if display is not None:
+            theme = Gtk.IconTheme.get_for_display(display)
+            for name in ("alexos-logo", "alexos-setup", "distributor-logo-alexos"):
+                if theme.has_icon(name):
+                    img = Gtk.Image.new_from_icon_name(name)
+                    img.set_pixel_size(96)
+                    return img
+        lbl = Gtk.Label(label="◈")
+        lbl.add_css_class("brand-word")
+        return lbl
+
+    # ── Page helpers ─────────────────────────────────────────────────────
+
+    def _page_shell(self):
+        clamp = Adw.Clamp()
+        clamp.set_maximum_size(480)
+        clamp.set_tightening_threshold(380)
+
+        box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=18)
         box.add_css_class("setup-page")
-        box.set_margin_top(34)
-        box.set_margin_bottom(34)
-        box.set_margin_start(28)
-        box.set_margin_end(28)
+        box.set_margin_top(32)
+        box.set_margin_bottom(32)
+        box.set_margin_start(32)
+        box.set_margin_end(32)
         clamp.set_child(box)
         return clamp, box
 
-    def make_logo(self):
-        display = Gdk.Display.get_default()
-        if display is not None:
-            icon_theme = Gtk.IconTheme.get_for_display(display)
-            for icon_name in ("alexos-logo", "alexos-setup"):
-                if icon_theme.has_icon(icon_name):
-                    image = Gtk.Image.new_from_icon_name(icon_name)
-                    image.set_pixel_size(110)
-                    return image
+    def _labeled_entry(self, label_text, entry):
+        vbox = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=6)
+        lbl = Gtk.Label(label=label_text)
+        lbl.add_css_class("field-label")
+        lbl.set_xalign(0)
+        entry.set_hexpand(True)
+        vbox.append(lbl)
+        vbox.append(entry)
+        return vbox
 
-        label = Gtk.Label(label="ALEXOS")
-        label.add_css_class("logo-word")
-        return label
+    def _password_entry(self):
+        e = Gtk.Entry()
+        e.set_visibility(False)
+        e.set_input_purpose(Gtk.InputPurpose.PASSWORD)
+        return e
 
-    def welcome_page(self):
-        clamp, box = self.page_shell()
+    # ── Welcome page ─────────────────────────────────────────────────────
+
+    def _welcome_page(self):
+        clamp, box = self._page_shell()
         box.set_valign(Gtk.Align.CENTER)
 
-        logo = self.make_logo()
-        logo.set_halign(Gtk.Align.CENTER)
-        box.append(logo)
-
-        title = Gtk.Label(label="Hi! This is AlexOS")
-        title.add_css_class("title")
+        title = Gtk.Label(label="Welcome!")
+        title.add_css_class("page-title")
         title.set_justify(Gtk.Justification.CENTER)
-        title.set_wrap(True)
+        title.set_halign(Gtk.Align.CENTER)
         box.append(title)
 
-        subtitle = Gtk.Label(label="Make one account. Then you can start using the computer.")
-        subtitle.add_css_class("subtitle")
-        subtitle.set_wrap(True)
-        subtitle.set_justify(Gtk.Justification.CENTER)
-        box.append(subtitle)
+        sub = Gtk.Label(label="Let's create your account.\nThis only takes a moment.")
+        sub.add_css_class("page-subtitle")
+        sub.set_justify(Gtk.Justification.CENTER)
+        sub.set_halign(Gtk.Align.CENTER)
+        sub.set_wrap(True)
+        box.append(sub)
 
-        button = Gtk.Button(label="Start")
-        button.add_css_class("suggested-action")
-        button.set_halign(Gtk.Align.CENTER)
-        button.connect("clicked", lambda _button: self.stack.set_visible_child_name("account"))
-        box.append(button)
+        btn = Gtk.Button(label="Get Started →")
+        btn.add_css_class("suggested-action")
+        btn.set_halign(Gtk.Align.CENTER)
+        btn.set_margin_top(10)
+
+        def go(_b):
+            self._set_step(1)
+            self.stack.set_visible_child_name("account")
+
+        btn.connect("clicked", go)
+        box.append(btn)
+
+        note = Gtk.Label(label="AlexOS  ·  Architect Workstation")
+        note.add_css_class("dim-note")
+        note.set_halign(Gtk.Align.CENTER)
+        note.set_margin_top(20)
+        box.append(note)
 
         return clamp
 
-    def labeled_entry(self, label_text, entry):
-        box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=6)
-        label = Gtk.Label(label=label_text)
-        label.add_css_class("field-label")
-        label.set_xalign(0)
-        entry.set_hexpand(True)
-        box.append(label)
-        box.append(entry)
-        return box
+    # ── Account page ─────────────────────────────────────────────────────
 
-    def password_entry(self):
-        entry = Gtk.Entry()
-        entry.set_visibility(False)
-        entry.set_input_purpose(Gtk.InputPurpose.PASSWORD)
-        return entry
+    def _account_page(self):
+        clamp, box = self._page_shell()
 
-    def account_page(self):
-        clamp, box = self.page_shell()
-
-        title = Gtk.Label(label="Who will use this?")
-        title.add_css_class("title")
+        title = Gtk.Label(label="Create your account")
+        title.add_css_class("page-title")
         title.set_xalign(0)
         title.set_wrap(True)
         box.append(title)
 
         self.username_entry = Gtk.Entry()
         self.username_entry.set_placeholder_text("alex")
-        box.append(self.labeled_entry("Login name", self.username_entry))
+        box.append(self._labeled_entry("Login name", self.username_entry))
 
         self.fullname_entry = Gtk.Entry()
         self.fullname_entry.set_placeholder_text("Alex")
-        box.append(self.labeled_entry("Your name", self.fullname_entry))
+        box.append(self._labeled_entry("Display name", self.fullname_entry))
 
-        self.password_entry_widget = self.password_entry()
-        box.append(self.labeled_entry("Secret password", self.password_entry_widget))
+        self.pw_entry = self._password_entry()
+        box.append(self._labeled_entry("Password (8+ characters)", self.pw_entry))
 
-        self.confirm_entry = self.password_entry()
-        box.append(self.labeled_entry("Type it again", self.confirm_entry))
+        self.pw_confirm = self._password_entry()
+        box.append(self._labeled_entry("Confirm password", self.pw_confirm))
 
-        self.admin_check = Gtk.CheckButton(label="Can install apps and change settings")
+        self.admin_check = Gtk.CheckButton(label="Can install apps and change system settings")
         self.admin_check.set_active(True)
         box.append(self.admin_check)
 
@@ -254,60 +389,64 @@ class SetupWizard(Adw.Application):
         self.error_label.set_xalign(0)
         box.append(self.error_label)
 
-        self.create_button = Gtk.Button(label="Done")
-        self.create_button.add_css_class("suggested-action")
-        self.create_button.set_halign(Gtk.Align.END)
-        self.create_button.connect("clicked", self.on_create_account)
-        box.append(self.create_button)
+        self.create_btn = Gtk.Button(label="Create Account")
+        self.create_btn.add_css_class("suggested-action")
+        self.create_btn.set_halign(Gtk.Align.END)
+        self.create_btn.connect("clicked", self._on_create)
+        box.append(self.create_btn)
 
         return clamp
 
-    def success_page(self):
-        clamp, box = self.page_shell()
+    # ── Success page ─────────────────────────────────────────────────────
+
+    def _success_page(self):
+        clamp, box = self._page_shell()
         box.set_valign(Gtk.Align.CENTER)
 
         icon = Gtk.Image.new_from_icon_name("emblem-ok-symbolic")
-        icon.set_pixel_size(72)
+        icon.set_pixel_size(80)
         icon.add_css_class("success-icon")
         icon.set_halign(Gtk.Align.CENTER)
         box.append(icon)
 
-        title = Gtk.Label(label="All set!")
-        title.add_css_class("title")
+        title = Gtk.Label(label="You're all set!")
+        title.add_css_class("page-title")
         title.set_justify(Gtk.Justification.CENTER)
         box.append(title)
 
-        self.success_label = Gtk.Label(label="The login screen will open soon.")
-        self.success_label.add_css_class("subtitle")
+        self.success_label = Gtk.Label(label="Opening the login screen…")
+        self.success_label.add_css_class("page-subtitle")
         self.success_label.set_justify(Gtk.Justification.CENTER)
         box.append(self.success_label)
 
         return clamp
 
-    def validate(self):
+    # ── Logic ─────────────────────────────────────────────────────────────
+
+    def _validate(self):
         username = self.username_entry.get_text().strip()
         fullname = self.fullname_entry.get_text().strip() or username
-        password = self.password_entry_widget.get_text()
-        confirm = self.confirm_entry.get_text()
+        password = self.pw_entry.get_text()
+        confirm = self.pw_confirm.get_text()
 
         if not USERNAME_RE.match(username):
-            raise ValueError("Login name: use small letters and numbers. Start with a letter.")
+            raise ValueError("Login name: use lowercase letters and numbers. Start with a letter.")
         if username in {"root", LIVE_USER}:
-            raise ValueError("Pick a different login name.")
+            raise ValueError("That login name is reserved. Pick a different one.")
         if ":" in fullname or "\n" in fullname:
-            raise ValueError("Your name has a character AlexOS cannot use.")
+            raise ValueError("Display name contains a character AlexOS cannot use.")
         if len(password) < 8:
-            raise ValueError("Password: use 8 or more letters, numbers, or symbols.")
+            raise ValueError("Password must be at least 8 characters.")
         if ":" in password or "\n" in password:
-            raise ValueError("Password has a character AlexOS cannot use.")
+            raise ValueError("Password contains an invalid character.")
         if password != confirm:
-            raise ValueError("The two passwords are not the same.")
-        if subprocess.run([ID, "-u", username], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL).returncode == 0:
+            raise ValueError("The passwords don't match.")
+        if subprocess.run([ID, "-u", username], capture_output=True).returncode == 0:
             raise ValueError("That login name is already taken.")
 
         return username, fullname, password, self.admin_check.get_active()
 
-    def run_privileged(self, args, input_text=None):
+    def _run_privileged(self, args, input_text=None):
         attempts = []
         if os.geteuid() == 0:
             attempts.append(args)
@@ -318,7 +457,7 @@ class SetupWizard(Adw.Application):
         last_error = None
         for command in attempts:
             try:
-                completed = subprocess.run(
+                result = subprocess.run(
                     command,
                     input=input_text,
                     text=True,
@@ -330,53 +469,43 @@ class SetupWizard(Adw.Application):
                 last_error = str(exc)
                 continue
 
-            if completed.returncode == 0:
-                return completed
+            if result.returncode == 0:
+                return result
 
-            last_error = completed.stderr.strip() or completed.stdout.strip()
+            last_error = result.stderr.strip() or result.stdout.strip()
 
-        raise RuntimeError(last_error or "AlexOS could not make the account.")
+        raise RuntimeError(last_error or "AlexOS could not complete the operation.")
 
-    def create_account(self, username, fullname, password, grant_sudo):
-        self.run_privileged([
-            USERADD,
-            "-m",
-            "-s",
-            "/bin/bash",
-            "-c",
-            fullname,
-            username,
-        ])
-        self.run_privileged([CHPASSWD], input_text=f"{username}:{password}\n")
-
+    def _create_account(self, username, fullname, password, grant_sudo):
+        self._run_privileged([USERADD, "-m", "-s", "/bin/bash", "-c", fullname, username])
+        self._run_privileged([CHPASSWD], input_text=f"{username}:{password}\n")
         if grant_sudo:
-            self.run_privileged([USERMOD, "-aG", "sudo", username])
+            self._run_privileged([USERMOD, "-aG", "sudo", username])
+        self._run_privileged([SHELL, "-s"], input_text=FINALIZE_SCRIPT)
 
-        self.run_privileged([SHELL, "-s"], input_text=FINALIZE_SCRIPT)
-
-    def on_create_account(self, _button):
+    def _on_create(self, _btn):
         self.error_label.set_text("")
-        self.create_button.set_sensitive(False)
+        self.create_btn.set_sensitive(False)
 
         try:
-            username, fullname, password, grant_sudo = self.validate()
-            self.create_account(username, fullname, password, grant_sudo)
+            username, fullname, password, grant_sudo = self._validate()
+            self._create_account(username, fullname, password, grant_sudo)
         except Exception as exc:
             self.error_label.set_text(str(exc))
-            self.create_button.set_sensitive(True)
+            self.create_btn.set_sensitive(True)
             return
 
+        self._set_step(2)
         self.stack.set_visible_child_name("success")
-        GLib.timeout_add_seconds(1, self.update_countdown)
+        GLib.timeout_add_seconds(1, self._tick_countdown)
 
-    def update_countdown(self):
+    def _tick_countdown(self):
         self.countdown -= 1
         if self.countdown <= 0:
             self.success_label.set_text("Opening the login screen now.")
             return False
-
-        second_word = "second" if self.countdown == 1 else "seconds"
-        self.success_label.set_text(f"The login screen will open in {self.countdown} {second_word}.")
+        s = "second" if self.countdown == 1 else "seconds"
+        self.success_label.set_text(f"Login screen opens in {self.countdown} {s}…")
         return True
 
 

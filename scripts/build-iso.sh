@@ -526,6 +526,7 @@ EOF
   write_blueprint_icon "${apps_dir}/org.gnome.TextEditor.svg" "TXT" "#93c5fd" "M44 35h30l14 14v43H44zM74 35v15h14M54 62h22M54 76h18"
   write_blueprint_icon "${apps_dir}/org.gnome.Software.svg" "APP" "#facc15" "M42 50h44v37H42zM52 50a12 12 0 0 1 24 0M52 65h24"
   write_blueprint_icon "${apps_dir}/alexos-software-updates.svg" "UPD" "#22d3ee" "M40 66a24 24 0 0 1 41-17M81 49h-16M81 49v-16M88 66a24 24 0 0 1-41 17M47 83h16M47 83v16M57 66h14"
+  write_blueprint_icon "${apps_dir}/alexos-icon-changer.svg" "ICO" "#c084fc" "M64 35a29 29 0 1 0 0 58a14 14 0 0 0 0-28a14 14 0 0 1 0-30M50 44a5 5 0 1 0 10 0a5 5 0 0 0-10 0M68 44a5 5 0 1 0 10 0a5 5 0 0 0-10 0M85 64a5 5 0 1 0 10 0a5 5 0 0 0-10 0"
   write_blueprint_icon "${apps_dir}/gimp.svg" "ART" "#fbbf24" "M45 85c18-5 24-25 38-44M80 38l10 10M42 88l17-5"
   write_blueprint_icon "${apps_dir}/blender.svg" "3D" "#fb923c" "M40 65h28M54 51l14 14l-14 14M68 65a15 15 0 1 0 30 0a15 15 0 0 0-30 0"
   write_blueprint_icon "${apps_dir}/scribus.svg" "PAGE" "#818cf8" "M45 36h28l14 14v42H45zM73 36v15h14M55 64h22M55 78h18"
@@ -602,10 +603,28 @@ install_whitesur_themes() {
   fi
 }
 
+install_plymouth_theme() {
+  log "Installing AlexOS Plymouth theme"
+
+  if [[ ! -x "${CHROOT_DIR}/usr/sbin/plymouth-set-default-theme" ]]; then
+    warn "plymouth-set-default-theme not found; skipping Plymouth theme setup."
+    return
+  fi
+
+  chroot_run plymouth-set-default-theme alexos || warn "Could not set Plymouth theme to alexos."
+
+  # Patch initramfs conf to include Plymouth so it ends up in the initrd
+  local initramfs_conf="${CHROOT_DIR}/etc/initramfs-tools/conf.d/alexos-plymouth.conf"
+  install -d "$(dirname "${initramfs_conf}")"
+  printf 'FRAMEBUFFER=y\n' > "${initramfs_conf}"
+}
+
 apply_overlay() {
   log "Applying chroot overlay"
   [[ -d "${OVERLAY_DIR}" ]] || die "Overlay directory missing: ${OVERLAY_DIR}"
   cp -a "${OVERLAY_DIR}/." "${CHROOT_DIR}/"
+  # Ensure new scripts are executable
+  chmod 0755 "${CHROOT_DIR}/usr/local/bin/alexos-icon-changer" 2>/dev/null || true
 }
 
 detect_source_commit() {
@@ -714,7 +733,7 @@ secondary-color='#00b4d8'
 
 [org/gnome/shell]
 enabled-extensions=['dash-to-dock@micxgx.gmail.com','user-theme@gnome-shell-extensions.gcampax.github.com']
-favorite-apps=['alexos-studio.desktop','google-chrome.desktop','org.gnome.Nautilus.desktop','librecad.desktop','freecad.desktop','org.inkscape.Inkscape.desktop','libreoffice-draw.desktop','org.gnome.TextEditor.desktop','alexos-software-updates.desktop']
+favorite-apps=['alexos-studio.desktop','google-chrome.desktop','org.gnome.Nautilus.desktop','librecad.desktop','freecad.desktop','org.inkscape.Inkscape.desktop','libreoffice-draw.desktop','org.gnome.TextEditor.desktop','alexos-software-updates.desktop','alexos-icon-changer.desktop']
 
 [org/gnome/shell/extensions/user-theme]
 name='WhiteSur-Dark'
@@ -739,6 +758,7 @@ configure_permissions() {
     /usr/local/bin/alexos-setup-wizard
     /usr/local/bin/alexos-software-updates
     /usr/local/bin/alexos-studio
+    /usr/local/bin/alexos-icon-changer
     /usr/local/bin/alexos-welcome
     /usr/local/sbin/alexos-update
     /usr/local/sbin/alexos-install-snap-store
@@ -910,6 +930,7 @@ main() {
   install_whitesur_themes
   install_blueprint_icon_theme
   apply_overlay
+  install_plymouth_theme
   configure_alexos_metadata
   configure_os_branding
   configure_locale_timezone

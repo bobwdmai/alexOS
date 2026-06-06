@@ -1,4 +1,6 @@
 # System / Live
+plymouth
+plymouth-label
 linux-image-amd64
 live-boot
 live-config
