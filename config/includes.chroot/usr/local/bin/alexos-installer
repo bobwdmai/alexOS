@@ -1,0 +1,73 @@
+#!/usr/bin/env bash
+set -Eeuo pipefail
+
+show_message() {
+  local kind="$1"
+  local title="$2"
+  local text="$3"
+
+  if command -v yad >/dev/null 2>&1; then
+    yad "--${kind}" --center --width=560 --title="${title}" --text="${text}" || return $?
+  elif command -v zenity >/dev/null 2>&1; then
+    zenity "--${kind}" --title="${title}" --width=560 --text="${text}" || return $?
+  else
+    printf '%s\n\n%s\n' "${title}" "${text}" >&2
+  fi
+}
+
+confirm_install() {
+  local text
+  text="<b>Install AlexOS to this computer?</b>\n\nThis can replace Windows, but erasing a disk deletes files, apps, and recovery partitions.\n\nBack up important files first. In the installer, choose the disk option carefully."
+
+  if command -v yad >/dev/null 2>&1; then
+    yad --question --center --width=590 --title="Install AlexOS" \
+      --button="Cancel:1" --button="Open Installer:0" --text="${text}"
+    return $?
+  fi
+
+  if command -v zenity >/dev/null 2>&1; then
+    zenity --question --title="Install AlexOS" --width=590 --ok-label="Open Installer" \
+      --cancel-label="Cancel" --text="${text}"
+    return $?
+  fi
+
+  printf '%b\n' "${text}" >&2
+  printf 'Type INSTALL to open the installer: ' >&2
+  read -r answer
+  [[ "${answer}" == "INSTALL" ]]
+}
+
+if [[ ! -e /run/live/medium/live/filesystem.squashfs ]]; then
+  show_message error "Install AlexOS" "The AlexOS installer only runs from the live USB or live ISO session."
+  exit 1
+fi
+
+if ! command -v calamares >/dev/null 2>&1; then
+  show_message error "Install AlexOS" "The installer is not installed on this image. Build a fresh AlexOS ISO."
+  exit 1
+fi
+
+confirm_install || exit 0
+
+export QT_AUTO_SCREEN_SCALE_FACTOR=1
+
+if command -v install-debian >/dev/null 2>&1; then
+  exec install-debian
+fi
+
+if command -v xhost >/dev/null 2>&1; then
+  xhost +si:localuser:root >/dev/null 2>&1 || true
+fi
+
+status=0
+if command -v pkexec >/dev/null 2>&1; then
+  pkexec calamares || status=$?
+else
+  sudo calamares || status=$?
+fi
+
+if command -v xhost >/dev/null 2>&1; then
+  xhost -si:localuser:root >/dev/null 2>&1 || true
+fi
+
+exit "${status}"

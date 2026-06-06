@@ -530,6 +530,7 @@ EOF
   write_blueprint_icon "${apps_dir}/org.gnome.TextEditor.svg" "TXT" "#93c5fd" "M44 35h30l14 14v43H44zM74 35v15h14M54 62h22M54 76h18"
   write_blueprint_icon "${apps_dir}/org.gnome.Software.svg" "APP" "#facc15" "M42 50h44v37H42zM52 50a12 12 0 0 1 24 0M52 65h24"
   write_blueprint_icon "${apps_dir}/alexos-app-store.svg" "APP" "#facc15" "M42 50h44v37H42zM52 50a12 12 0 0 1 24 0M52 65h24M56 72h16M64 64v18"
+  write_blueprint_icon "${apps_dir}/alexos-installer.svg" "INS" "#34d399" "M38 92L64 30L90 92M50 68h28M64 82v24M54 96l10 10l10-10"
   write_blueprint_icon "${apps_dir}/alexos-software-updates.svg" "UPD" "#22d3ee" "M40 66a24 24 0 0 1 41-17M81 49h-16M81 49v-16M88 66a24 24 0 0 1-41 17M47 83h16M47 83v16M57 66h14"
   write_blueprint_icon "${apps_dir}/alexos-icon-changer.svg" "ICO" "#c084fc" "M64 35a29 29 0 1 0 0 58a14 14 0 0 0 0-28a14 14 0 0 1 0-30M50 44a5 5 0 1 0 10 0a5 5 0 0 0-10 0M68 44a5 5 0 1 0 10 0a5 5 0 0 0-10 0M85 64a5 5 0 1 0 10 0a5 5 0 0 0-10 0"
   write_blueprint_icon "${apps_dir}/alexos-write.svg"        "WRT" "#38bdf8" "M44 35h24l14 14v42H44zM68 35v15h14M52 63h24M52 76h20M52 89h14"
@@ -571,6 +572,7 @@ EOF
   cp "${apps_dir}/alexos-app-store.svg" "${hicolor_apps}/software-store.svg"
   cp "${apps_dir}/alexos-app-store.svg" "${hicolor_apps}/system-software-install.svg"
   cp "${apps_dir}/alexos-app-store.svg" "${pixmaps_dir}/alexos-app-store.svg"
+  cp "${apps_dir}/alexos-installer.svg" "${pixmaps_dir}/alexos-installer.svg"
 
   if [[ -x "${CHROOT_DIR}/usr/bin/gtk-update-icon-cache" ]]; then
     chroot_run gtk-update-icon-cache -f -t "/usr/share/icons/${ALEXOS_ICON_THEME}" || true
@@ -749,7 +751,7 @@ secondary-color='#00b4d8'
 
 [org/gnome/shell]
 enabled-extensions=['dash-to-dock@micxgx.gmail.com','user-theme@gnome-shell-extensions.gcampax.github.com']
-favorite-apps=['alexos-studio.desktop','alexos-app-store.desktop','google-chrome.desktop','alexos-files.desktop','librecad.desktop','freecad.desktop','alexos-draw.desktop','alexos-write.desktop','alexos-calc.desktop','alexos-software-updates.desktop','alexos-icon-changer.desktop']
+favorite-apps=['alexos-installer.desktop','alexos-studio.desktop','alexos-app-store.desktop','google-chrome.desktop','alexos-files.desktop','librecad.desktop','freecad.desktop','alexos-draw.desktop','alexos-write.desktop','alexos-calc.desktop','alexos-software-updates.desktop','alexos-icon-changer.desktop']
 
 [org/gnome/shell/extensions/user-theme]
 name='WhiteSur-Dark'
@@ -772,6 +774,7 @@ configure_permissions() {
   log "Setting overlay permissions"
   local executable_paths=(
     /usr/local/bin/alexos-setup-wizard
+    /usr/local/bin/alexos-installer
     /usr/local/bin/alexos-app-store
     /usr/local/bin/alexos-software-updates
     /usr/local/bin/alexos-studio

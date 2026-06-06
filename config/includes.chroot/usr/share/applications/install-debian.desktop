@@ -1,0 +1,13 @@
+[Desktop Entry]
+Type=Application
+Version=1.0
+Name=Install AlexOS
+GenericName=System Installer
+Exec=alexos-installer
+Comment=Install AlexOS to this computer
+Keywords=alexos;system;install;installer;windows;replace
+Icon=/usr/share/pixmaps/alexos-installer.svg
+Terminal=false
+Categories=System;
+StartupWMClass=calamares
+StartupNotify=true

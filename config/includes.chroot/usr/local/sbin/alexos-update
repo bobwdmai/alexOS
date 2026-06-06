@@ -76,6 +76,7 @@ fix_overlay_permissions() {
     /usr/local/bin/alexos-draw
     /usr/local/bin/alexos-files
     /usr/local/bin/alexos-icon-changer
+    /usr/local/bin/alexos-installer
     /usr/local/bin/alexos-setup-wizard
     /usr/local/bin/alexos-software-updates
     /usr/local/bin/alexos-studio

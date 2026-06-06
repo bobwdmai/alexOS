@@ -1,0 +1,36 @@
+---
+componentName: alexos
+welcomeStyleCalamares: true
+welcomeExpandingLogo: true
+windowExpanding: normal
+windowSize: 860px,560px
+windowPlacement: center
+
+strings:
+    productName:         AlexOS
+    shortProductName:    AlexOS
+    version:             Architect Workstation
+    shortVersion:        Workstation
+    versionedName:       AlexOS Architect Workstation
+    shortVersionedName:  AlexOS
+    bootloaderEntryName: AlexOS
+    productUrl:          https://github.com/bobwdmai/alexOS
+    supportUrl:          https://github.com/bobwdmai/alexOS/issues
+    knownIssuesUrl:      https://github.com/bobwdmai/alexOS/issues
+    releaseNotesUrl:     https://github.com/bobwdmai/alexOS/releases
+    donateUrl:           https://github.com/bobwdmai/alexOS
+
+images:
+    productLogo:         "alexos-logo.svg"
+    productIcon:         "alexos-logo.svg"
+    productWelcome:      "welcome.svg"
+
+slideshow:               "show.qml"
+
+style:
+    sidebarBackground:   "#071421"
+    sidebarText:         "#e0fbfc"
+    sidebarTextSelect:   "#00b4d8"
+    sidebarTextHighlight: "#102638"
+
+slideshowAPI: 2
