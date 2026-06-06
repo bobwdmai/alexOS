@@ -69,6 +69,32 @@ require_commands() {
   fi
 }
 
+fix_overlay_permissions() {
+  local executable_paths=(
+    /usr/local/bin/alexos-app-store
+    /usr/local/bin/alexos-calc
+    /usr/local/bin/alexos-draw
+    /usr/local/bin/alexos-files
+    /usr/local/bin/alexos-icon-changer
+    /usr/local/bin/alexos-setup-wizard
+    /usr/local/bin/alexos-software-updates
+    /usr/local/bin/alexos-studio
+    /usr/local/bin/alexos-welcome
+    /usr/local/bin/alexos-write
+    /usr/local/sbin/alexos-app-install
+    /usr/local/sbin/alexos-update
+  )
+
+  local path
+  for path in "${executable_paths[@]}"; do
+    if [[ -f "${path}" ]]; then
+      chmod 0755 "${path}"
+    fi
+  done
+
+  find /usr/share/applications -maxdepth 1 -name 'alexos-*.desktop' -exec chmod 0644 {} + 2>/dev/null || true
+}
+
 latest_commit() {
   local api="https://api.github.com/repos/${ALEXOS_UPDATE_REPO}/commits/${ALEXOS_UPDATE_BRANCH}"
   local body
@@ -142,6 +168,7 @@ apply_overlay() {
 
   log "Applying AlexOS overlay"
   cp -a "${overlay_dir}/." /
+  fix_overlay_permissions
 
   install -d -m 0755 /etc/alexos
   printf '%s\n' "${target_commit}" > "${CURRENT_COMMIT_FILE}"
@@ -152,6 +179,9 @@ apply_overlay() {
 
   if command -v gtk-update-icon-cache >/dev/null 2>&1 && [[ -d "/usr/share/icons/${ALEXOS_ICON_THEME}" ]]; then
     gtk-update-icon-cache -f -t "/usr/share/icons/${ALEXOS_ICON_THEME}" || true
+  fi
+  if command -v gtk-update-icon-cache >/dev/null 2>&1 && [[ -d /usr/share/icons/hicolor ]]; then
+    gtk-update-icon-cache -f -t /usr/share/icons/hicolor || true
   fi
 
   if command -v systemctl >/dev/null 2>&1; then

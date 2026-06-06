@@ -49,13 +49,13 @@ window.setup-window {
   color: #e0fbfc;
 }
 
-/* ── Header strip ─────────────────────────────────────────────────────── */
+/* Header strip */
 .setup-header {
   background: linear-gradient(180deg, rgba(0,180,216,0.10) 0%, transparent 100%);
   border-bottom: 1px solid rgba(0,180,216,0.14);
 }
 
-/* ── Typography ───────────────────────────────────────────────────────── */
+/* Typography */
 .brand-word {
   font-size: 34px;
   font-weight: 900;
@@ -90,7 +90,7 @@ window.setup-window {
   font-size: 14px;
 }
 
-/* ── Inputs ───────────────────────────────────────────────────────────── */
+/* Inputs */
 entry {
   background: rgba(0,180,216,0.06);
   border: 1px solid rgba(0,180,216,0.18);
@@ -111,13 +111,13 @@ entry placeholder {
   color: #3a6070;
 }
 
-/* ── Checkbutton ──────────────────────────────────────────────────────── */
+/* Checkbutton */
 checkbutton {
   color: #94c7d8;
   font-size: 14px;
 }
 
-/* ── Buttons ──────────────────────────────────────────────────────────── */
+/* Buttons */
 button {
   border-radius: 8px;
   font-weight: 700;
@@ -141,7 +141,7 @@ button.suggested-action:disabled {
   box-shadow: none;
 }
 
-/* ── Step dots ────────────────────────────────────────────────────────── */
+/* Step dots */
 .step-dot {
   min-width: 7px;
   min-height: 7px;

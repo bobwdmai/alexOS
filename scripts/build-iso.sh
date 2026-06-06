@@ -447,6 +447,7 @@ install_blueprint_icon_theme() {
   local devices_dir="${icon_root}/scalable/devices"
   local status_dir="${icon_root}/scalable/status"
   local mimetypes_dir="${icon_root}/scalable/mimetypes"
+  local hicolor_apps="${CHROOT_DIR}/usr/share/icons/hicolor/scalable/apps"
 
   install -d \
     "${apps_dir}" \
@@ -454,7 +455,8 @@ install_blueprint_icon_theme() {
     "${categories_dir}" \
     "${devices_dir}" \
     "${status_dir}" \
-    "${mimetypes_dir}"
+    "${mimetypes_dir}" \
+    "${hicolor_apps}"
 
   cat > "${icon_root}/index.theme" <<EOF
 [Icon Theme]
@@ -543,6 +545,7 @@ EOF
   write_blueprint_icon "${apps_dir}/org.gnome.tweaks.svg" "TUNE" "#a78bfa" "M42 52h44M42 76h44M56 52v-8M72 76v-8M56 52v8M72 76v8"
   write_blueprint_icon "${apps_dir}/org.gnome.Extensions.svg" "ADD" "#34d399" "M64 42v44M42 64h44M48 48l32 32M80 48L48 80"
   cp "${apps_dir}/alexos-app-store.svg" "${apps_dir}/system-software-install.svg"
+  cp "${apps_dir}/alexos-app-store.svg" "${apps_dir}/software-store.svg"
   cp "${apps_dir}/alexos-software-updates.svg" "${apps_dir}/system-software-update.svg"
   cp "${apps_dir}/alexos-software-updates.svg" "${apps_dir}/software-properties.svg"
 
@@ -562,8 +565,11 @@ EOF
   write_blueprint_icon "${status_dir}/appointment-soon.svg" "TIME" "#facc15" "M44 42h40v42H44zM52 34v16M76 34v16M44 58h40M64 66v12l9 5"
   write_blueprint_icon "${mimetypes_dir}/document-new.svg" "NEW" "#e2e8f0" "M44 35h30l14 14v43H44zM74 35v15h14M54 70h24M66 58v24"
 
+  cp "${apps_dir}"/alexos-*.svg "${hicolor_apps}/"
+
   if [[ -x "${CHROOT_DIR}/usr/bin/gtk-update-icon-cache" ]]; then
     chroot_run gtk-update-icon-cache -f -t "/usr/share/icons/${ALEXOS_ICON_THEME}" || true
+    chroot_run gtk-update-icon-cache -f -t /usr/share/icons/hicolor || true
   fi
 }
 

@@ -8,24 +8,24 @@ cx = Window.GetWidth() / 2;
 cy = Window.GetHeight() / 2;
 
 # ── Title ──────────────────────────────────────────────────────────────
-title_img = Image.Text("ALEXOS", 0.878, 0.984, 0.988, 1, "Sans Bold 52");
+title_img = Image.Text("ALEXOS", 0.878, 0.984, 0.988, 1, "Sans Bold 44");
 title_spr = Sprite(title_img);
 title_spr.SetX(cx - title_img.GetWidth() / 2);
-title_spr.SetY(cy - 90);
+title_spr.SetY(cy - 118);
 title_spr.SetZ(10);
 
 # ── Subtitle ────────────────────────────────────────────────────────────
-sub_img = Image.Text("ARCHITECT  WORKSTATION", 0.0, 0.706, 0.847, 1, "Sans 18");
+sub_img = Image.Text("ARCHITECT WORKSTATION", 0.0, 0.706, 0.847, 1, "Sans 16");
 sub_spr = Sprite(sub_img);
 sub_spr.SetX(cx - sub_img.GetWidth() / 2);
-sub_spr.SetY(cy - 36);
+sub_spr.SetY(cy - 52);
 sub_spr.SetZ(10);
 
-# ── Thin separator line (text of dashes) ───────────────────────────────
-sep_img = Image.Text("────────────────────────────────────────", 0.0, 0.420, 0.510, 1, "Monospace 10");
+# ── Thin separator line ────────────────────────────────────────────────
+sep_img = Image.Text("------------------------", 0.0, 0.420, 0.510, 1, "Monospace 10");
 sep_spr = Sprite(sep_img);
 sep_spr.SetX(cx - sep_img.GetWidth() / 2);
-sep_spr.SetY(cy - 4);
+sep_spr.SetY(cy - 20);
 sep_spr.SetZ(10);
 
 # ── Spinner ─────────────────────────────────────────────────────────────
@@ -66,12 +66,12 @@ has_progress = 0;
 progress_spr = 0;
 
 fun boot_progress(progress, duration) {
-    filled = Math.Int(progress * 36);
+    filled = Math.Int(progress * 18);
     bar = "[";
     for (i = 0; i < filled; i = i + 1) {
         bar = bar + "=";
     }
-    for (i = filled; i < 36; i = i + 1) {
+    for (i = filled; i < 18; i = i + 1) {
         bar = bar + " ";
     }
     bar = bar + "]";
@@ -84,7 +84,7 @@ fun boot_progress(progress, duration) {
     bar_img = Image.Text(bar, 0.0, 0.706, 0.847, 1, "Monospace 12");
     progress_spr = Sprite(bar_img);
     progress_spr.SetX(cx - bar_img.GetWidth() / 2);
-    progress_spr.SetY(cy + 64);
+    progress_spr.SetY(cy + 72);
     progress_spr.SetZ(10);
 }
 Plymouth.SetBootProgressFunction(boot_progress);
